@@ -235,4 +235,88 @@ public class SupervisorService : ISupervisorService
         await _context.SaveChangesAsync();
         return true;
     }
+
+    public async Task<bool> SendBackToTaggerAsync(int fileId, int studentId, int supervisorId, string? notes)
+    {
+        var isAssigned = await _context.StudentSupervisors
+            .AnyAsync(ss => ss.SupervisorId == supervisorId && ss.StudentId == studentId && ss.IsActive);
+
+        if (!isAssigned)
+        {
+            return false;
+        }
+
+        var assignment = await _context.FileAssignments
+            .FirstOrDefaultAsync(fa => fa.FileMetadataId == fileId && fa.UserId == studentId);
+
+        if (assignment == null)
+        {
+            return false;
+        }
+
+        var file = await _context.FileMetadata.FindAsync(fileId);
+
+        if (file == null)
+        {
+            return false;
+        }
+
+        assignment.IsCompleted = false;
+        assignment.CompletedAt = null;
+        assignment.IsCheckedBySupervisor = false;
+        assignment.CheckedBySupervisorId = supervisorId;
+        assignment.CheckedAt = DateTime.UtcNow;
+        assignment.SupervisorNotes = notes;
+
+        file.Status = FileTaggingStatus.NeedsRevision;
+        file.TaggingCompletedAt = null;
+
+        await _context.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task<bool> EditFileTagsAsync(int fileId, int studentId, int supervisorId, List<TagDto> tags, string? notes)
+    {
+        var isAssigned = await _context.StudentSupervisors
+            .AnyAsync(ss => ss.SupervisorId == supervisorId && ss.StudentId == studentId && ss.IsActive);
+
+        if (!isAssigned)
+        {
+            return false;
+        }
+
+        var assignment = await _context.FileAssignments
+            .FirstOrDefaultAsync(fa => fa.FileMetadataId == fileId && fa.UserId == studentId);
+
+        if (assignment == null)
+        {
+            return false;
+        }
+
+        var existingTags = await _context.FileTags
+            .Where(t => t.FileMetadataId == fileId)
+            .ToListAsync();
+
+        _context.FileTags.RemoveRange(existingTags);
+
+        foreach (var tag in tags)
+        {
+            _context.FileTags.Add(new FileTag
+            {
+                FileMetadataId = fileId,
+                TagKey = tag.TagKey,
+                TagValue = tag.TagValue,
+                CreatedByUserId = supervisorId,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        assignment.IsCheckedBySupervisor = true;
+        assignment.CheckedBySupervisorId = supervisorId;
+        assignment.CheckedAt = DateTime.UtcNow;
+        assignment.SupervisorNotes = notes;
+
+        await _context.SaveChangesAsync();
+        return true;
+    }
 }

@@ -317,7 +317,7 @@ public class FileService : IFileService
             _context.FileTags.Add(fileTag);
         }
 
-        if (file.Status == FileTaggingStatus.Assigned)
+        if (file.Status == FileTaggingStatus.Assigned || file.Status == FileTaggingStatus.NeedsRevision)
         {
             file.Status = FileTaggingStatus.InProgress;
         }
