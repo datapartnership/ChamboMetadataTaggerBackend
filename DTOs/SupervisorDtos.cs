@@ -52,3 +52,17 @@ public class MarkFileCheckedRequest
     public int StudentId { get; set; }
     public string? Notes { get; set; }
 }
+
+public class SendBackToTaggerRequest
+{
+    public int FileId { get; set; }
+    public int StudentId { get; set; }
+    public string? Notes { get; set; }
+}
+
+public class EditFileTagsRequest
+{
+    public int StudentId { get; set; }
+    public List<TagDto> Tags { get; set; } = new();
+    public string? Notes { get; set; }
+}
