@@ -22,5 +22,6 @@ public enum FileTaggingStatus
     Unassigned,
     Assigned,
     InProgress,
-    Completed
+    Completed,
+    NeedsRevision
 }

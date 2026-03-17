@@ -11,4 +11,6 @@ public interface ISupervisorService
     Task<IEnumerable<SupervisorReviewDto>> GetAllStudentFilesForSupervisorAsync(int supervisorId);
     Task<IEnumerable<StudentSupervisorDto>> GetAllSupervisorAssignmentsAsync();
     Task<bool> MarkFileAsCheckedAsync(int fileId, int studentId, int supervisorId, string? notes);
+    Task<bool> SendBackToTaggerAsync(int fileId, int studentId, int supervisorId, string? notes);
+    Task<bool> EditFileTagsAsync(int fileId, int studentId, int supervisorId, List<TagDto> tags, string? notes);
 }

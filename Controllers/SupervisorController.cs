@@ -256,4 +256,72 @@ public class SupervisorController : ControllerBase
             return StatusCode(500, ApiResponse<bool>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
+
+    [HttpPost("send-back-to-tagger")]
+    public async Task<ActionResult<ApiResponse<bool>>> SendBackToTagger([FromBody] SendBackToTaggerRequest request)
+    {
+        try
+        {
+            var supervisorIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
+            {
+                return Unauthorized(ApiResponse<bool>.ErrorResponse("Invalid supervisor credentials"));
+            }
+
+            var result = await _supervisorService.SendBackToTaggerAsync(
+                request.FileId,
+                request.StudentId,
+                supervisorId,
+                request.Notes);
+
+            if (!result)
+            {
+                return BadRequest(ApiResponse<bool>.ErrorResponse("Failed to send file back. Student may not be assigned to you or file not found."));
+            }
+
+            return Ok(ApiResponse<bool>.SuccessResponse(true, "File sent back to tagger for revision"));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, ApiResponse<bool>.ErrorResponse($"An error occurred: {ex.Message}"));
+        }
+    }
+
+    [HttpPut("files/{fileId}/tags")]
+    public async Task<ActionResult<ApiResponse<bool>>> EditFileTags(int fileId, [FromBody] EditFileTagsRequest request)
+    {
+        try
+        {
+            var supervisorIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
+            {
+                return Unauthorized(ApiResponse<bool>.ErrorResponse("Invalid supervisor credentials"));
+            }
+
+            if (request.Tags == null || request.Tags.Count == 0)
+            {
+                return BadRequest(ApiResponse<bool>.ErrorResponse("At least one tag is required"));
+            }
+
+            var result = await _supervisorService.EditFileTagsAsync(
+                fileId,
+                request.StudentId,
+                supervisorId,
+                request.Tags,
+                request.Notes);
+
+            if (!result)
+            {
+                return BadRequest(ApiResponse<bool>.ErrorResponse("Failed to edit tags. Student may not be assigned to you or file not found."));
+            }
+
+            return Ok(ApiResponse<bool>.SuccessResponse(true, "File tags updated successfully"));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, ApiResponse<bool>.ErrorResponse($"An error occurred: {ex.Message}"));
+        }
+    }
 }
