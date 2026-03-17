@@ -2,7 +2,7 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 COPY . .
-RUN dotnet publish -c Release -o /out
+RUN dotnet publish MetadataTagging.csproj -c Release -o /out
 
 # ---------- Runtime stage ----------
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
