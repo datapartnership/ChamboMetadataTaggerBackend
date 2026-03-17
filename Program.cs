@@ -12,22 +12,6 @@ using MetadataTagger.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Load .env file if present (for local development)
-var envFile = Path.Combine(Directory.GetCurrentDirectory(), ".env");
-if (File.Exists(envFile))
-{
-    foreach (var line in File.ReadAllLines(envFile))
-    {
-        var trimmed = line.Trim();
-        if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('#')) continue;
-        var sep = trimmed.IndexOf('=');
-        if (sep < 0) continue;
-        var key = trimmed[..sep].Trim();
-        var value = trimmed[(sep + 1)..].Trim();
-        Environment.SetEnvironmentVariable(key, value);
-    }
-}
-
 builder.Configuration.AddEnvironmentVariables();
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.Section));
@@ -35,6 +19,7 @@ builder.Services.Configure<StorageOptions>(builder.Configuration.GetSection(Stor
 builder.Services.Configure<S3StorageOptions>(builder.Configuration.GetSection("Storage:S3"));
 builder.Services.Configure<AzureStorageOptions>(builder.Configuration.GetSection("Storage:AzureStorage"));
 builder.Services.Configure<DatabaseOptions>(builder.Configuration.GetSection(DatabaseOptions.Section));
+builder.Services.Configure<MetadataTagger.Options.CorsOptions>(builder.Configuration.GetSection(MetadataTagger.Options.CorsOptions.Section));
 builder.Services.Configure<DefaultAdminSettings>(builder.Configuration.GetSection(DefaultAdminSettings.Section));
 builder.Services.Configure<DefaultTaggerSettings>(builder.Configuration.GetSection(DefaultTaggerSettings.Section));
 builder.Services.Configure<DefaultSupervisorSettings>(builder.Configuration.GetSection(DefaultSupervisorSettings.Section));
@@ -146,12 +131,19 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
+var corsOptions = builder.Configuration.GetSection(MetadataTagger.Options.CorsOptions.Section).Get<MetadataTagger.Options.CorsOptions>()
+    ?? new MetadataTagger.Options.CorsOptions();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
     {
-        policy.AllowAnyOrigin()
-              .AllowAnyMethod()
+        if (corsOptions.AllowedOrigins is ["*"])
+            policy.AllowAnyOrigin();
+        else
+            policy.WithOrigins(corsOptions.AllowedOrigins);
+
+        policy.AllowAnyMethod()
               .AllowAnyHeader();
     });
 });
