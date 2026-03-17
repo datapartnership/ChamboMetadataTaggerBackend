@@ -4,6 +4,7 @@ public class DatabaseOptions
 {
     public const string Section = "Database";
     public string Provider { get; set; } = "sqlite";
+    public bool UseManagedIdentity { get; set; } = false;
     public string Host { get; set; } = "localhost";
     public int Port { get; set; } = 5432;
     public string Name { get; set; } = string.Empty;

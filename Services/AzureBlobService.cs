@@ -1,3 +1,4 @@
+using Azure.Identity;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
@@ -16,7 +17,16 @@ public class AzureBlobService : IStorageService
     {
         var settings = blobSettings.Value;
 
-        var blobServiceClient = new BlobServiceClient(settings.ConnectionString);
+        BlobServiceClient blobServiceClient;
+        if (settings.UseManagedIdentity)
+        {
+            var serviceUri = new Uri($"https://{settings.AccountName}.blob.core.windows.net");
+            blobServiceClient = new BlobServiceClient(serviceUri, new DefaultAzureCredential());
+        }
+        else
+        {
+            blobServiceClient = new BlobServiceClient(settings.ConnectionString);
+        }
         _containerClient = blobServiceClient.GetBlobContainerClient(settings.ContainerName);
     }
 

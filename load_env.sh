@@ -41,8 +41,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     value=${value%\'}
   fi
 
-  # Export only if key is non-empty
-  [[ -n "$key" ]] && export "$key=$value"
+  # Export only if key and value are both non-empty
+  [[ -n "$key" && -n "$value" ]] && export "$key=$value"
 done < "$ENV_FILE"
 
 echo "Environment variables loaded from $ENV_FILE"

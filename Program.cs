@@ -1,4 +1,5 @@
 using System.Text;
+using Azure.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -10,6 +11,22 @@ using MetadataTagging.Services;
 using MetadataTagger.Options;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Load .env file if present (for local development)
+var envFile = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+if (File.Exists(envFile))
+{
+    foreach (var line in File.ReadAllLines(envFile))
+    {
+        var trimmed = line.Trim();
+        if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('#')) continue;
+        var sep = trimmed.IndexOf('=');
+        if (sep < 0) continue;
+        var key = trimmed[..sep].Trim();
+        var value = trimmed[(sep + 1)..].Trim();
+        Environment.SetEnvironmentVariable(key, value);
+    }
+}
 
 builder.Configuration.AddEnvironmentVariables();
 
@@ -27,7 +44,26 @@ var dbOptions = builder.Configuration.GetSection(DatabaseOptions.Section).Get<Da
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
 {
     if (dbOptions.Provider.Equals("postgresql", StringComparison.OrdinalIgnoreCase))
-        options.UseNpgsql($"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Password={dbOptions.Password}");
+    {
+        if (dbOptions.UseManagedIdentity)
+        {
+            var connectionString = $"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Ssl Mode=Require;Trust Server Certificate=true;";
+            var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
+            dataSourceBuilder.UsePeriodicPasswordProvider(async (_, ct) =>
+            {
+                var credential = new DefaultAzureCredential();
+                var token = await credential.GetTokenAsync(
+                    new Azure.Core.TokenRequestContext(new[] { "https://ossrdbms-aad.database.windows.net/.default" }), ct);
+                return token.Token;
+            }, TimeSpan.FromMinutes(55), TimeSpan.FromSeconds(0));
+            var dataSource = dataSourceBuilder.Build();
+            options.UseNpgsql(dataSource);
+        }
+        else
+        {
+            options.UseNpgsql($"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Password={dbOptions.Password}");
+        }
+    }
     else
         options.UseSqlite($"Data Source={dbOptions.DataSource}");
 });
