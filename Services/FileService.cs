@@ -21,20 +21,25 @@ public class FileService : IFileService
         var files = await _context.FileMetadata
             .Include(f => f.FileAssignments)
             .Include(f => f.Tags)
-            .Select(f => MapToDto(f))
             .ToListAsync();
 
-        return files;
+        return files.Select(f => MapToDto(f));
     }
 
-    public async Task<FileMetadataDto?> GetFileByIdAsync(int fileId)
+    public async Task<FileMetadataDto?> GetFileByIdAsync(int fileId, int? userId = null)
     {
         var file = await _context.FileMetadata
             .Include(f => f.FileAssignments)
             .Include(f => f.Tags)
             .FirstOrDefaultAsync(f => f.Id == fileId);
 
-        return file != null ? MapToDto(file) : null;
+        if (file == null) return null;
+
+        var assignment = userId.HasValue
+            ? file.FileAssignments.FirstOrDefault(fa => fa.UserId == userId.Value)
+            : null;
+
+        return MapToDto(file, assignment);
     }
 
     public async Task<FileMetadataDto?> GetFileByBlobNameAsync(string blobName)
@@ -276,14 +281,15 @@ public class FileService : IFileService
 
     public async Task<IEnumerable<FileMetadataDto>> GetFilesAssignedToUserAsync(int userId)
     {
-        var files = await _context.FileAssignments
+        var assignments = await _context.FileAssignments
             .Where(fa => fa.UserId == userId)
             .Include(fa => fa.FileMetadata)
                 .ThenInclude(f => f.Tags)
-            .Select(fa => MapToDto(fa.FileMetadata))
+            .Include(fa => fa.FileMetadata)
+                .ThenInclude(f => f.FileAssignments)
             .ToListAsync();
 
-        return files;
+        return assignments.Select(fa => MapToDto(fa.FileMetadata, fa)).ToList();
     }
 
     public async Task<bool> AddTagsToFileAsync(int fileId, int userId, List<TagDto> tags)
@@ -383,10 +389,9 @@ public class FileService : IFileService
         var files = await _context.FileMetadata
             .Where(f => f.Status == FileTaggingStatus.Unassigned)
             .Include(f => f.Tags)
-            .Select(f => MapToDto(f))
             .ToListAsync();
 
-        return files;
+        return files.Select(f => MapToDto(f));
     }
 
     public async Task<bool> UpdateAudioMetadataAsync(int fileId, double durationSeconds)
@@ -408,9 +413,9 @@ public class FileService : IFileService
         return true;
     }
 
-    private static FileMetadataDto MapToDto(FileMetadata file)
+    private static FileMetadataDto MapToDto(FileMetadata file, FileAssignment? assignment = null)
     {
-        return new FileMetadataDto
+        var dto = new FileMetadataDto
         {
             Id = file.Id,
             FileName = file.FileName,
@@ -430,5 +435,13 @@ public class FileService : IFileService
             }).ToList(),
             AssignedToUserIds = file.FileAssignments.Select(fa => fa.UserId).ToList()
         };
+
+        if (assignment != null && file.Status == FileTaggingStatus.NeedsRevision)
+        {
+            dto.SupervisorNotes = assignment.SupervisorNotes;
+            dto.SupervisorCheckedAt = assignment.CheckedAt;
+        }
+
+        return dto;
     }
 }

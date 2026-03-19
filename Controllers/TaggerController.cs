@@ -54,7 +54,7 @@ public class TaggerController : ControllerBase
                 return Unauthorized(ApiResponse<FileMetadataDto>.ErrorResponse("Invalid user credentials"));
             }
 
-            var file = await _fileService.GetFileByIdAsync(fileId);
+            var file = await _fileService.GetFileByIdAsync(fileId, userId);
 
             if (file == null)
             {
