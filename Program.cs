@@ -36,7 +36,10 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
             var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
             dataSourceBuilder.UsePeriodicPasswordProvider(async (_, ct) =>
             {
-                var credential = new DefaultAzureCredential();
+                var credentialOptions = new DefaultAzureCredentialOptions();
+                if (!string.IsNullOrEmpty(dbOptions.ManagedIdentityClientId))
+                    credentialOptions.ManagedIdentityClientId = dbOptions.ManagedIdentityClientId;
+                var credential = new DefaultAzureCredential(credentialOptions);
                 var token = await credential.GetTokenAsync(
                     new Azure.Core.TokenRequestContext(new[] { "https://ossrdbms-aad.database.windows.net/.default" }), ct);
                 return token.Token;
@@ -138,7 +141,7 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
     {
-        if (corsOptions.AllowedOrigins is ["*"])
+        if (corsOptions.AllowedOrigins.Contains("*"))
             policy.AllowAnyOrigin();
         else
             policy.WithOrigins(corsOptions.AllowedOrigins);

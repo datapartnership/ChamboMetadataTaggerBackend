@@ -15,6 +15,8 @@ public class FileMetadataDto
     public double? DurationSeconds { get; set; }
     public List<TagDto> Tags { get; set; } = new();
     public List<int> AssignedToUserIds { get; set; } = new();
+    public string? SupervisorNotes { get; set; }
+    public DateTime? SupervisorCheckedAt { get; set; }
 }
 
 public class CreateFileMetadataRequest

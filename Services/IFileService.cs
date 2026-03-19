@@ -5,7 +5,7 @@ namespace MetadataTagging.Services;
 public interface IFileService
 {
     Task<IEnumerable<FileMetadataDto>> GetAllFilesAsync();
-    Task<FileMetadataDto?> GetFileByIdAsync(int fileId);
+    Task<FileMetadataDto?> GetFileByIdAsync(int fileId, int? userId = null);
     Task<FileMetadataDto?> GetFileByBlobNameAsync(string blobName);
     Task<FileMetadataDto> CreateFileMetadataAsync(CreateFileMetadataRequest request);
     Task<FileMetadataDto> ImportFileFromBlobAsync(BlobFileDto blobFile);
