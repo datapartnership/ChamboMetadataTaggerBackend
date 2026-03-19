@@ -17,4 +17,5 @@ cd -
 
 cp -r ../ChamboMetadataTaggerFrontend/dist/* ./wwwroot/
 
-docker buildx build --platform linux/amd64 -t mozdag.azurecr.io/chambo-metadata-tagger --push .
+export AZURE_CLI_DISABLE_CONNECTION_VERIFICATION=1
+az acr build --registry mozdag --image chambo-metadata-tagger:latest --platform linux/amd64 .
