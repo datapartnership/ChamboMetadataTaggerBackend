@@ -30,13 +30,13 @@ public class AzureBlobService : IStorageService
         _containerClient = blobServiceClient.GetBlobContainerClient(settings.ContainerName);
     }
 
-    public async Task<IEnumerable<BlobFileDto>> ListBlobsAsync()
+    public async Task<IEnumerable<BlobFileDto>> ListBlobsAsync(string? prefix = null)
     {
         var blobs = new List<BlobFileDto>();
 
         try
         {
-            await foreach (BlobItem blobItem in _containerClient.GetBlobsAsync())
+            await foreach (BlobItem blobItem in _containerClient.GetBlobsAsync(prefix: prefix))
             {
                 var blobClient = _containerClient.GetBlobClient(blobItem.Name);
 

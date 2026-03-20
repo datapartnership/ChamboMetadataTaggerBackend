@@ -4,7 +4,7 @@ namespace MetadataTagging.Services;
 
 public interface IStorageService
 {
-    Task<IEnumerable<BlobFileDto>> ListBlobsAsync();
+    Task<IEnumerable<BlobFileDto>> ListBlobsAsync(string? prefix = null);
     Task<string> GetBlobUrlAsync(string blobName);
     Task<string> GetBlobSasUrlAsync(string blobName, int expiryMinutes = 60);
     Task<bool> BlobExistsAsync(string blobName);

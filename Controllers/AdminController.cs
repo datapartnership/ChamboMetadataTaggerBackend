@@ -161,11 +161,11 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("blobs")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<BlobFileDto>>>> GetAllBlobs()
+    public async Task<ActionResult<ApiResponse<IEnumerable<BlobFileDto>>>> GetAllBlobs([FromQuery] string? folder = null)
     {
         try
         {
-            var blobs = await _blobService.ListBlobsAsync();
+            var blobs = await _blobService.ListBlobsAsync(prefix: folder);
             return Ok(ApiResponse<IEnumerable<BlobFileDto>>.SuccessResponse(blobs));
         }
         catch (Exception ex)
