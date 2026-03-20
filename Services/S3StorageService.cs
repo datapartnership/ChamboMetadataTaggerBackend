@@ -37,13 +37,13 @@ public class S3StorageService : IStorageService
         _s3Client = new AmazonS3Client(settings.AccessKey, settings.SecretKey, config);
     }
 
-    public async Task<IEnumerable<BlobFileDto>> ListBlobsAsync()
+    public async Task<IEnumerable<BlobFileDto>> ListBlobsAsync(string? prefix = null)
     {
         var blobs = new List<BlobFileDto>();
 
         try
         {
-            var request = new ListObjectsV2Request { BucketName = _bucketName };
+            var request = new ListObjectsV2Request { BucketName = _bucketName, Prefix = prefix };
             ListObjectsV2Response response;
 
             do
