@@ -26,31 +26,37 @@ builder.Services.Configure<DefaultSupervisorSettings>(builder.Configuration.GetS
 
 var dbOptions = builder.Configuration.GetSection(DatabaseOptions.Section).Get<DatabaseOptions>()
     ?? new DatabaseOptions();
+
+// Build the NpgsqlDataSource once at startup so the same instance is reused across
+// all DbContext instantiations. Creating a new data source inside the AddDbContext
+// lambda causes EF Core to see different options on every request and allocate a new
+// internal IServiceProvider each time, triggering ManyServiceProvidersCreatedWarning.
+Npgsql.NpgsqlDataSource? npgsqlDataSource = null;
+if (dbOptions.Provider.Equals("postgresql", StringComparison.OrdinalIgnoreCase) && dbOptions.UseManagedIdentity)
+{
+    var connectionString = $"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Ssl Mode=Require;Trust Server Certificate=true;";
+    var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
+    dataSourceBuilder.UsePeriodicPasswordProvider(async (_, ct) =>
+    {
+        var credentialOptions = new DefaultAzureCredentialOptions();
+        if (!string.IsNullOrEmpty(dbOptions.ManagedIdentityClientId))
+            credentialOptions.ManagedIdentityClientId = dbOptions.ManagedIdentityClientId;
+        var credential = new DefaultAzureCredential(credentialOptions);
+        var token = await credential.GetTokenAsync(
+            new Azure.Core.TokenRequestContext(new[] { "https://ossrdbms-aad.database.windows.net/.default" }), ct);
+        return token.Token;
+    }, TimeSpan.FromMinutes(55), TimeSpan.FromSeconds(0));
+    npgsqlDataSource = dataSourceBuilder.Build();
+}
+
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
 {
     if (dbOptions.Provider.Equals("postgresql", StringComparison.OrdinalIgnoreCase))
     {
-        if (dbOptions.UseManagedIdentity)
-        {
-            var connectionString = $"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Ssl Mode=Require;Trust Server Certificate=true;";
-            var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
-            dataSourceBuilder.UsePeriodicPasswordProvider(async (_, ct) =>
-            {
-                var credentialOptions = new DefaultAzureCredentialOptions();
-                if (!string.IsNullOrEmpty(dbOptions.ManagedIdentityClientId))
-                    credentialOptions.ManagedIdentityClientId = dbOptions.ManagedIdentityClientId;
-                var credential = new DefaultAzureCredential(credentialOptions);
-                var token = await credential.GetTokenAsync(
-                    new Azure.Core.TokenRequestContext(new[] { "https://ossrdbms-aad.database.windows.net/.default" }), ct);
-                return token.Token;
-            }, TimeSpan.FromMinutes(55), TimeSpan.FromSeconds(0));
-            var dataSource = dataSourceBuilder.Build();
-            options.UseNpgsql(dataSource);
-        }
+        if (npgsqlDataSource != null)
+            options.UseNpgsql(npgsqlDataSource);
         else
-        {
             options.UseNpgsql($"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Password={dbOptions.Password}");
-        }
     }
     else
         options.UseSqlite($"Data Source={dbOptions.DataSource}");
