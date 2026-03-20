@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MetadataTagging.Data;
 using MetadataTagging.DTOs;
 using MetadataTagging.Models;
 using MetadataTagging.Services;
@@ -17,19 +18,22 @@ public class AdminController : ControllerBase
     private readonly IStorageService _blobService;
     private readonly ISupervisorService _supervisorService;
     private readonly ILogger<AdminController> _logger;
+    private readonly ApplicationDbContext _dbContext;
 
     public AdminController(
         IUserService userService,
         IFileService fileService,
         IStorageService blobService,
         ISupervisorService supervisorService,
-        ILogger<AdminController> logger)
+        ILogger<AdminController> logger,
+        ApplicationDbContext dbContext)
     {
         _userService = userService;
         _fileService = fileService;
         _blobService = blobService;
         _supervisorService = supervisorService;
         _logger = logger;
+        _dbContext = dbContext;
     }
 
     [HttpGet("users")]
@@ -583,6 +587,31 @@ public class AdminController : ControllerBase
         {
             _logger.LogError(ex, "Error occurred while getting supervisor assignments");
             return StatusCode(500, ApiResponse<IEnumerable<StudentSupervisorDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+        }
+    }
+
+    [HttpPost("reset-database")]
+    public async Task<ActionResult<ApiResponse<bool>>> ResetDatabase()
+    {
+        try
+        {
+            _logger.LogWarning("Database reset initiated by admin");
+
+            await _dbContext.FileTags.ExecuteDeleteAsync();
+            await _dbContext.FileAssignments.ExecuteDeleteAsync();
+            await _dbContext.StudentSupervisors.ExecuteDeleteAsync();
+            await _dbContext.FileMetadata.ExecuteDeleteAsync();
+            await _dbContext.Users
+                .Where(u => u.Role != UserRoles.Admin)
+                .ExecuteDeleteAsync();
+
+            _logger.LogWarning("Database reset completed successfully");
+            return Ok(ApiResponse<bool>.SuccessResponse(true, "Database reset successfully. All non-admin data has been cleared."));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error occurred while resetting the database");
+            return StatusCode(500, ApiResponse<bool>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
