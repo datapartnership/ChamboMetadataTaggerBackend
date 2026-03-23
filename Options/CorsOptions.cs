@@ -7,5 +7,5 @@ public class CorsOptions
     /// <summary>
     /// List of allowed origins. Set to ["*"] to allow any origin (default behaviour).
     /// </summary>
-    public string[] AllowedOrigins { get; set; } = ["*"];
+    public string[] AllowedOrigins { get; set; } = [];
 }
