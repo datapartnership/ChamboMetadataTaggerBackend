@@ -147,10 +147,12 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
     {
-        if (corsOptions.AllowedOrigins.Contains("*"))
+        var origins = corsOptions.AllowedOrigins.Select(o => o.TrimEnd('/')).ToArray();
+        if (origins.Contains("*"))
             policy.AllowAnyOrigin();
-        else
-            policy.WithOrigins(corsOptions.AllowedOrigins);
+        else if (origins.Length > 0)
+            policy.WithOrigins(origins);
+        // else: no origins configured — deny all (no CORS headers sent)
 
         policy.AllowAnyMethod()
               .AllowAnyHeader();

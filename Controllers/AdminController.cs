@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using MetadataTagging.Data;
 using MetadataTagging.DTOs;
 using MetadataTagging.Models;
@@ -175,8 +176,8 @@ public class AdminController : ControllerBase
         }
     }
 
-    [HttpGet("blobs/{blobName}/preview")]
-    public async Task<ActionResult<ApiResponse<FilePreviewDto>>> GetBlobPreview(string blobName, [FromQuery] int expiryMinutes = 60)
+    [HttpGet("blobs/preview")]
+    public async Task<ActionResult<ApiResponse<FilePreviewDto>>> GetBlobPreview([FromQuery] string blobName, [FromQuery] int expiryMinutes = 60)
     {
         try
         {
