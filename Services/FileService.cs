@@ -323,9 +323,9 @@ public class FileService : IFileService
             _context.FileTags.Add(fileTag);
         }
 
-        if (file.Status == FileTaggingStatus.Assigned || file.Status == FileTaggingStatus.NeedsRevision)
+        if (file.Status == FileTaggingStatus.Assigned || file.Status == FileTaggingStatus.SendBackToTagger)
         {
-            file.Status = FileTaggingStatus.InProgress;
+            file.Status = FileTaggingStatus.SubmittedToSupervisor;
         }
 
         await _context.SaveChangesAsync();
@@ -351,7 +351,7 @@ public class FileService : IFileService
 
         assignment.IsCompleted = true;
         assignment.CompletedAt = DateTime.UtcNow;
-        file.Status = FileTaggingStatus.Completed;
+        file.Status = FileTaggingStatus.ApprovedBySupervisor;
         file.TaggingCompletedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
@@ -436,7 +436,7 @@ public class FileService : IFileService
             AssignedToUserIds = file.FileAssignments.Select(fa => fa.UserId).ToList()
         };
 
-        if (assignment != null && file.Status == FileTaggingStatus.NeedsRevision)
+        if (assignment != null && file.Status == FileTaggingStatus.SendBackToTagger)
         {
             dto.SupervisorNotes = assignment.SupervisorNotes;
             dto.SupervisorCheckedAt = assignment.CheckedAt;
