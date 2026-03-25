@@ -268,7 +268,7 @@ public class SupervisorService : ISupervisorService
         assignment.CheckedAt = DateTime.UtcNow;
         assignment.SupervisorNotes = notes;
 
-        file.Status = FileTaggingStatus.NeedsRevision;
+        file.Status = FileTaggingStatus.SendBackToTagger;
         file.TaggingCompletedAt = null;
 
         await _context.SaveChangesAsync();
