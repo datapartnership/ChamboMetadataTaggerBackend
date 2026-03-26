@@ -309,18 +309,28 @@ public class FileService : IFileService
             return false;
         }
 
+        var existingTags = await _context.FileTags
+            .Where(t => t.FileMetadataId == fileId)
+            .ToListAsync();
+
         foreach (var tag in tags)
         {
-            var fileTag = new FileTag
+            var existing = existingTags.FirstOrDefault(t => t.TagKey == tag.TagKey);
+            if (existing != null)
             {
-                FileMetadataId = fileId,
-                TagKey = tag.TagKey,
-                TagValue = tag.TagValue,
-                CreatedByUserId = userId,
-                CreatedAt = DateTime.UtcNow
-            };
-
-            _context.FileTags.Add(fileTag);
+                existing.TagValue = tag.TagValue;
+            }
+            else
+            {
+                _context.FileTags.Add(new FileTag
+                {
+                    FileMetadataId = fileId,
+                    TagKey = tag.TagKey,
+                    TagValue = tag.TagValue,
+                    CreatedByUserId = userId,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
         }
 
         if (file.Status == FileTaggingStatus.Assigned || file.Status == FileTaggingStatus.SendBackToTagger)
@@ -351,7 +361,7 @@ public class FileService : IFileService
 
         assignment.IsCompleted = true;
         assignment.CompletedAt = DateTime.UtcNow;
-        file.Status = FileTaggingStatus.ApprovedBySupervisor;
+        file.Status = FileTaggingStatus.SubmittedToSupervisor;
         file.TaggingCompletedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
@@ -360,16 +370,22 @@ public class FileService : IFileService
 
     public async Task<IEnumerable<TaggingProgressDto>> GetTaggingProgressAsync()
     {
-        var progress = await _context.FileAssignments
+        var assignments = await _context.FileAssignments
             .Include(fa => fa.User)
             .Include(fa => fa.FileMetadata)
+            .ToListAsync();
+
+        var progress = assignments
             .GroupBy(fa => fa.User)
             .Select(g => new TaggingProgressDto
             {
                 UserId = g.Key.Id,
                 Username = g.Key.Username,
                 TotalAssigned = g.Count(),
-                TotalCompleted = g.Count(fa => fa.IsCompleted),
+                TotalInProgress = g.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.Assigned),
+                TotalSubmitted = g.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.SubmittedToSupervisor),
+                TotalSentBack = g.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.SendBackToTagger),
+                TotalApproved = g.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.ApprovedBySupervisor),
                 CompletedFiles = g.Where(fa => fa.IsCompleted)
                     .Select(fa => new CompletedFileDto
                     {
@@ -379,7 +395,7 @@ public class FileService : IFileService
                     })
                     .ToList()
             })
-            .ToListAsync();
+            .ToList();
 
         return progress;
     }

@@ -89,6 +89,39 @@ public class UserService : IUserService
         };
     }
 
+    public async Task<BulkCreateUsersResponse> BulkCreateUsersAsync(IEnumerable<CreateUserRequest> requests)
+    {
+        var response = new BulkCreateUsersResponse();
+
+        foreach (var request in requests)
+        {
+            var result = new BulkCreateUserResult
+            {
+                Email = request.Email,
+                Username = request.Username
+            };
+
+            try
+            {
+                var user = await CreateUserAsync(request);
+                result.Success = true;
+                result.User = user;
+            }
+            catch (InvalidOperationException ex)
+            {
+                result.Success = false;
+                result.Error = ex.Message;
+            }
+
+            response.Results.Add(result);
+        }
+
+        response.SucceededCount = response.Results.Count(r => r.Success);
+        response.FailedCount = response.Results.Count(r => !r.Success);
+
+        return response;
+    }
+
     public async Task<bool> UpdateUserAsync(int userId, UpdateUserRequest request)
     {
         var user = await _context.Users.FindAsync(userId);
