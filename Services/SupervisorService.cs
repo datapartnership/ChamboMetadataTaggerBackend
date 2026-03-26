@@ -297,18 +297,15 @@ public class SupervisorService : ISupervisorService
             .Where(t => t.FileMetadataId == fileId)
             .ToListAsync();
 
-        _context.FileTags.RemoveRange(existingTags);
-
         foreach (var tag in tags)
         {
-            _context.FileTags.Add(new FileTag
+            var existing = existingTags.FirstOrDefault(t => t.TagKey == tag.TagKey);
+            if (existing != null)
             {
-                FileMetadataId = fileId,
-                TagKey = tag.TagKey,
-                TagValue = tag.TagValue,
-                CreatedByUserId = supervisorId,
-                CreatedAt = DateTime.UtcNow
-            });
+                existing.TagValue = tag.TagValue;
+            }
+            // Tags with keys not already present for this file are ignored —
+            // supervisors may only edit existing tag values, not define new tags.
         }
 
         assignment.IsCheckedBySupervisor = true;

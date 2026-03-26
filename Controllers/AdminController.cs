@@ -99,6 +99,35 @@ public class AdminController : ControllerBase
         }
     }
 
+    [HttpPost("users/bulk")]
+    public async Task<ActionResult<ApiResponse<BulkCreateUsersResponse>>> BulkCreateUsers([FromBody] BulkCreateUsersRequest request)
+    {
+        if (request.Users == null || request.Users.Count == 0)
+        {
+            return BadRequest(ApiResponse<BulkCreateUsersResponse>.ErrorResponse("No users provided"));
+        }
+
+        var validRoles = new[] { UserRoles.Admin, UserRoles.Tagger, UserRoles.Supervisor };
+        var invalidRoleEntry = request.Users.FirstOrDefault(u => !validRoles.Contains(u.Role));
+        if (invalidRoleEntry != null)
+        {
+            return BadRequest(ApiResponse<BulkCreateUsersResponse>.ErrorResponse(
+                $"Invalid role '{invalidRoleEntry.Role}' for user '{invalidRoleEntry.Username}'. Must be 'Admin', 'Tagger', or 'Supervisor'"));
+        }
+
+        try
+        {
+            var result = await _userService.BulkCreateUsersAsync(request.Users);
+            return Ok(ApiResponse<BulkCreateUsersResponse>.SuccessResponse(result,
+                $"{result.SucceededCount} user(s) created, {result.FailedCount} failed"));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error occurred during bulk user creation");
+            return StatusCode(500, ApiResponse<BulkCreateUsersResponse>.ErrorResponse($"An error occurred: {ex.Message}"));
+        }
+    }
+
     [HttpPut("users/{userId}")]
     public async Task<ActionResult<ApiResponse<bool>>> UpdateUser(int userId, [FromBody] UpdateUserRequest request)
     {

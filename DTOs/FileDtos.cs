@@ -105,7 +105,10 @@ public class TaggingProgressDto
     public int UserId { get; set; }
     public required string Username { get; set; }
     public int TotalAssigned { get; set; }
-    public int TotalCompleted { get; set; }
+    public int TotalInProgress { get; set; }
+    public int TotalSubmitted { get; set; }
+    public int TotalSentBack { get; set; }
+    public int TotalApproved { get; set; }
     public List<CompletedFileDto> CompletedFiles { get; set; } = new();
 }
 

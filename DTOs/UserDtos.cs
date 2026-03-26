@@ -25,3 +25,24 @@ public class UpdateUserRequest
     public string? Password { get; set; }
     public string? Role { get; set; }
 }
+
+public class BulkCreateUsersRequest
+{
+    public required List<CreateUserRequest> Users { get; set; }
+}
+
+public class BulkCreateUserResult
+{
+    public string Email { get; set; } = string.Empty;
+    public string Username { get; set; } = string.Empty;
+    public bool Success { get; set; }
+    public UserDto? User { get; set; }
+    public string? Error { get; set; }
+}
+
+public class BulkCreateUsersResponse
+{
+    public List<BulkCreateUserResult> Results { get; set; } = new();
+    public int SucceededCount { get; set; }
+    public int FailedCount { get; set; }
+}
