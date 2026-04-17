@@ -1,11 +1,11 @@
 # ---------- Build stage ----------
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM artifactory.worldbank.org/itsdt-docker-virtual/dotnet/sdk:8.0.411 AS build
 WORKDIR /src
 COPY . .
 RUN dotnet publish MetadataTagging.csproj -c Release -o /out
 
 # ---------- Runtime stage ----------
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+FROM artifactory.worldbank.org/itsdt-docker-virtual/dotnet/aspnet:8.0.21 AS runtime
 WORKDIR /app
 ENV ASPNETCORE_URLS=http://0.0.0.0:8080
 EXPOSE 8080
