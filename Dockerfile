@@ -1,5 +1,5 @@
 # ---------- Build stage ----------
-FROM artifactory.worldbank.org/itsdt-docker-virtual/dotnet/sdk:8.0.411 AS build
+FROM artifactory.worldbank.org/itsdt-docker-virtual/dotnet/sdk:10.0.200 AS build
 WORKDIR /src
 COPY . .
 RUN dotnet publish MetadataTagging.csproj -c Release -o /out
