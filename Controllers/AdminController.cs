@@ -620,6 +620,27 @@ public class AdminController : ControllerBase
         }
     }
 
+    [HttpPost("clear-assignments")]
+    public async Task<ActionResult<ApiResponse<bool>>> ClearAssignments()
+    {
+        try
+        {
+            _logger.LogWarning("Clear assignments initiated by admin");
+
+            await _dbContext.FileTags.ExecuteDeleteAsync();
+            await _dbContext.FileAssignments.ExecuteDeleteAsync();
+            await _dbContext.StudentSupervisors.ExecuteDeleteAsync();
+
+            _logger.LogWarning("Clear assignments completed successfully");
+            return Ok(ApiResponse<bool>.SuccessResponse(true, "All file assignments, taggings, and tagger-supervisor assignments have been cleared."));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error occurred while clearing assignments");
+            return StatusCode(500, ApiResponse<bool>.ErrorResponse($"An error occurred: {ex.Message}"));
+        }
+    }
+
     [HttpPost("reset-database")]
     public async Task<ActionResult<ApiResponse<bool>>> ResetDatabase()
     {
