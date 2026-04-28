@@ -101,7 +101,12 @@ public class FileService : IFileService
     public async Task<int> SyncFilesFromBlobStorageAsync()
     {
         var blobs = await _blobService.ListBlobsAsync();
+        var blobNames = blobs.Select(b => b.BlobName).ToHashSet();
         var importedCount = 0;
+
+        await _context.FileMetadata
+            .Where(f => !blobNames.Contains(f.BlobName))
+            .ExecuteDeleteAsync();
 
         foreach (var blob in blobs)
         {
