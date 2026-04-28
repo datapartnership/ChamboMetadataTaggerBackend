@@ -8,3 +8,4 @@ obj/
 .vscode/
 copyFEandBuildImage.sh
 backend.http
+*.http
