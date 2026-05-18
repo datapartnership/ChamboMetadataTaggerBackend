@@ -15,12 +15,7 @@ This document describes the complete workflow for managing file metadata tagging
 
 ### 1. Initial Setup
 
-```bash
-# Login as admin
-curl -X POST https://localhost:5001/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@metadatatagging.com","password":"Admin123!"}'
-```
+Authenticate via Azure AD (MSAL) to obtain a Bearer token, then use it in all subsequent requests.
 
 ### 2. Create Tagger Users
 
@@ -31,10 +26,11 @@ curl -X POST https://localhost:5001/api/admin/users \
   -d '{
     "username": "tagger1",
     "email": "tagger1@example.com",
-    "password": "Tagger123!",
     "role": "Tagger"
   }'
 ```
+
+> The `email` must match the user's Microsoft account UPN. The `AzureObjectId` is linked automatically when they first log in via Azure AD.
 
 ### 3. View Available Files in Blob Storage
 
@@ -158,13 +154,9 @@ curl -X GET https://localhost:5001/api/admin/tagging-progress \
 
 ## Tagger Operations
 
-### 1. Login
+### 1. Authenticate
 
-```bash
-curl -X POST https://localhost:5001/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"tagger1@example.com","password":"Tagger123!"}'
-```
+Obtain an Azure AD access token via MSAL.js on the frontend with scope `api://<ClientId>/.default`.
 
 ### 2. View Assigned Files
 

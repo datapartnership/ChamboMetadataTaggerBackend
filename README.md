@@ -4,7 +4,7 @@ A complete ASP.NET Web API 8.0 backend solution for managing file metadata taggi
 
 ## Features
 
-- **JWT Authentication & Authorization** with three roles:
+- **Azure Entra (MSAL) Authentication & Authorization** with three roles:
   - **Admin**: Full access to manage users, files, supervisors, and view tagging progress
   - **Supervisor**: Review and monitor tagging work of assigned students
   - **Tagger** (Student): Access only to assigned files for metadata tagging
@@ -20,7 +20,7 @@ A complete ASP.NET Web API 8.0 backend solution for managing file metadata taggi
 ## Workflow
 
 ### Admin Workflow
-1. Login with admin credentials
+1. Authenticate via Azure AD (MSAL) — obtain a Bearer token using your Microsoft account
 2. View all files in Azure Blob Storage (`GET /api/admin/blobs`)
 3. Preview any blob file before assignment (`GET /api/admin/blobs/{blobName}/preview`)
 4. Create supervisor and tagger users (`POST /api/admin/users`)
@@ -29,7 +29,7 @@ A complete ASP.NET Web API 8.0 backend solution for managing file metadata taggi
 7. Monitor tagging progress and supervisor assignments
 
 ### Tagger Workflow (Student)
-1. Login with tagger credentials
+1. Authenticate via Azure AD (MSAL) — obtain a Bearer token using your Microsoft account
 2. View assigned files (`GET /api/tagger/my-files`)
 3. Get secure preview URL for file (`GET /api/tagger/files/{fileId}/preview`)
 4. View/preview the document in the frontend
@@ -37,7 +37,7 @@ A complete ASP.NET Web API 8.0 backend solution for managing file metadata taggi
 6. Mark files as completed (`POST /api/tagger/files/{fileId}/complete`)
 
 ### Supervisor Workflow
-1. Login with supervisor credentials
+1. Authenticate via Azure AD (MSAL) — obtain a Bearer token using your Microsoft account
 2. View assigned students and their progress (`GET /api/supervisor/my-students`)
 3. Review specific student's tagged files (`GET /api/supervisor/students/{studentId}/files`)
 4. Preview files with student's tags (`GET /api/supervisor/files/{fileId}/preview`)
@@ -50,31 +50,42 @@ A complete ASP.NET Web API 8.0 backend solution for managing file metadata taggi
 ```
 MetadataTagging/
 ├── Controllers/
-│   ├── AuthController.cs         # Authentication endpoints
 │   ├── AdminController.cs        # Admin-only endpoints
+│   ├── SupervisorController.cs   # Supervisor-only endpoints
 │   └── TaggerController.cs       # Tagger-only endpoints
 ├── Data/
 │   └── ApplicationDbContext.cs   # Entity Framework DbContext
 ├── DTOs/
 │   ├── ApiResponse.cs            # Standard API response wrapper
-│   ├── AuthDtos.cs               # Authentication DTOs
 │   ├── FileDtos.cs               # File-related DTOs
+│   ├── SupervisorDtos.cs         # Supervisor-related DTOs
 │   └── UserDtos.cs               # User-related DTOs
 ├── Models/
-│   ├── User.cs                   # User entity
+│   ├── User.cs                   # User entity + UserRoles constants
 │   ├── FileMetadata.cs           # File metadata entity
 │   ├── FileAssignment.cs         # File assignment entity
 │   ├── FileTag.cs                # File tag entity
-│   └── AppSettings.cs            # Configuration options classes
+│   └── StudentSupervisor.cs      # Student-supervisor relationship entity
+├── Options/
+│   ├── AzureAdGroupMappingOptions.cs  # Group ID → role mapping config
+│   ├── AzureStorageOptions.cs    # Azure Blob Storage options
+│   ├── CorsOptions.cs            # CORS options
+│   ├── DatabaseOptions.cs        # Database options
+│   ├── S3StorageOptions.cs       # S3 options
+│   └── StorageOptions.cs         # Storage provider selector
 ├── Services/
-│   ├── IAuthService.cs           # Authentication service interface
-│   ├── AuthService.cs            # Authentication implementation
+│   ├── GroupRoleClaimsTransformation.cs  # Maps Azure AD groups → app roles
+│   ├── IUserProvisioningService.cs       # Auto-provisioning interface
+│   ├── UserProvisioningService.cs        # Auto-provisions users on first login
 │   ├── IUserService.cs           # User service interface
 │   ├── UserService.cs            # User service implementation
 │   ├── IFileService.cs           # File service interface
 │   ├── FileService.cs            # File service implementation
-│   ├── IAzureBlobService.cs      # Azure Blob service interface
-│   └── AzureBlobService.cs       # Azure Blob service implementation
+│   ├── IStorageService.cs        # Storage service interface
+│   ├── AzureBlobService.cs       # Azure Blob Storage implementation
+│   ├── S3StorageService.cs       # S3 implementation
+│   ├── ISupervisorService.cs     # Supervisor service interface
+│   └── SupervisorService.cs      # Supervisor service implementation
 ├── Program.cs                    # Application entry point
 ├── appsettings.json              # Configuration file
 └── MetadataTagging.csproj        # Project file
@@ -94,69 +105,55 @@ The application supports configuration via environment variables, which override
 
 #### Environment Variables
 
-Copy `.env.example` to `.env` and fill in your values. ASP.NET Core maps environment variables to configuration using double-underscore (`__`) as the section separator:
+ASP.NET Core maps environment variables to configuration using double-underscore (`__`) as the section separator:
 
 | Environment Variable | Description | Required |
 |---|---|---|
-| `DatabaseProvider` | Database backend: `sqlite` (default) or `postgresql` | No (default: `sqlite`) |
-| `JwtSettings__SecretKey` | JWT signing secret (min. 32 characters) | **Yes** |
-| `JwtSettings__Issuer` | JWT issuer identifier | No (default: `MetadataTaggingAPI`) |
-| `JwtSettings__Audience` | JWT audience identifier | No (default: `MetadataTaggingClient`) |
-| `JwtSettings__ExpiryMinutes` | Token expiry in minutes | No (default: `480`) |
-| `AzureStorage__ConnectionString` | Azure Blob Storage connection string | **Yes** |
-| `AzureStorage__ContainerName` | Azure Blob Storage container name | No (default: `files`) |
-| `ConnectionStrings__PostgreSQLConnection` | PostgreSQL connection string (required when `DatabaseProvider=postgresql`) | No |
-| `DefaultAdmin__Username` | Default admin username | No |
-| `DefaultAdmin__Email` | Default admin email | No |
-| `DefaultAdmin__Password` | Default admin password | No |
-| `DefaultTagger__Username` | Default tagger username | No |
-| `DefaultTagger__Email` | Default tagger email | No |
-| `DefaultTagger__Password` | Default tagger password | No |
-| `DefaultSupervisor__Username` | Default supervisor username | No |
-| `DefaultSupervisor__Email` | Default supervisor email | No |
-| `DefaultSupervisor__Password` | Default supervisor password | No |
+| `AzureAd__TenantId` | Azure AD tenant ID | **Yes** |
+| `AzureAd__ClientId` | API app registration client ID | **Yes** |
+| `AzureAd__Audience` | Token audience (`api://<ClientId>`) | **Yes** |
+| `AzureAdGroupMapping__AdminGroupId` | Azure AD group GUID for Admins | **Yes** |
+| `AzureAdGroupMapping__TaggerGroupId` | Azure AD group GUID for Taggers | **Yes** |
+| `AzureAdGroupMapping__SupervisorGroupId` | Azure AD group GUID for Supervisors | **Yes** |
+| `Database__Provider` | `sqlite` (default) or `postgresql` | No |
+| `Database__DataSource` | SQLite file path | No (default: `app.db`) |
+| `Storage__Provider` | `AzureStorage` or `s3` | **Yes** |
+| `Storage__AzureStorage__ConnectionString` | Azure Blob Storage connection string | If using Azure Storage |
+| `Storage__AzureStorage__ContainerName` | Blob container name | If using Azure Storage |
+| `Cors__AllowedOrigins__0` | First allowed CORS origin | No |
 
-To generate a secure JWT secret key:
-```bash
-openssl rand -base64 48
-```
-
-> **Security note**: Never commit `.env` or `appsettings.Development.json` containing real secrets to source control. The `.env.example` file contains only placeholder values and is safe to commit.
+> **Security note**: Never commit `.env` or `appsettings.Development.json` containing real tenant IDs or secrets to source control.
 
 #### Using appsettings.json (local development only)
 
-1. Update `appsettings.json` with your settings:
+1. Update `appsettings.json` with your Azure AD and storage settings:
 
 ```json
 {
-  "ConnectionStrings": {
-    "DefaultConnection": "Data Source=metadatatagging.db",
-    "PostgreSQLConnection": "Host=localhost;Port=5432;Database=metadatatagging;Username=postgres;Password=yourpassword"
+  "AzureAd": {
+    "Instance": "https://login.microsoftonline.com/",
+    "TenantId": "<your-tenant-id>",
+    "ClientId": "<your-api-app-registration-client-id>",
+    "Audience": "api://<your-api-app-registration-client-id>"
   },
-  "DatabaseProvider": "sqlite",
-  "JwtSettings": {
-    "SecretKey": "your-secret-key-here-min-32-characters-long-change-in-production",
-    "Issuer": "MetadataTaggingAPI",
-    "Audience": "MetadataTaggingClient",
-    "ExpiryMinutes": 480
+  "AzureAdGroupMapping": {
+    "AdminGroupId": "<object-id-of-admin-group>",
+    "TaggerGroupId": "<object-id-of-tagger-group>",
+    "SupervisorGroupId": "<object-id-of-supervisor-group>"
   },
-  "AzureBlobStorage": {
-    "ConnectionString": "your-azure-storage-connection-string",
-    "ContainerName": "files"
-  },
-  "DefaultAdmin": {
-    "Username": "admin",
-    "Email": "admin@metadatatagging.com",
-    "Password": "Admin123!"
+  "Storage": {
+    "Provider": "AzureStorage",
+    "AzureStorage": {
+      "ConnectionString": "<your-azure-storage-connection-string>",
+      "ContainerName": "files"
+    }
   }
 }
 ```
 
-2. **Generate a secure JWT secret key** (minimum 32 characters)
-
-3. **Add your Azure Blob Storage connection string**
-
-4. **Configure default admin user** - Update the `DefaultAdmin` section with your preferred admin credentials. This user will be automatically created on first run if it doesn't exist.
+2. **Register an app in Azure AD** and set `TenantId`, `ClientId`, and `Audience` (see [CONFIGURATION.md](CONFIGURATION.md) for the full setup guide)
+3. **Create Azure AD security groups** for each role and copy their Object IDs into `AzureAdGroupMapping`
+4. **Add your Azure Blob Storage connection string**
 
 ### Running the Application
 
@@ -182,27 +179,12 @@ dotnet run
 
 ### Database
 
-The SQLite database will be automatically created on first run. A default admin user is automatically created based on the `DefaultAdmin` configuration in `appsettings.json`:
-
-- **Email**: `admin@metadatatagging.com` (configurable)
-- **Username**: `admin` (configurable)
-- **Password**: `Admin123!` (configurable)
-- **Role**: Admin
+The database is automatically created on first run (`EnsureCreated`). Users are **not** pre-seeded — they are provisioned automatically when they first authenticate via Azure AD. Admins can also pre-create user records via `POST /api/admin/users` (email + role only; the Azure Object ID is linked on first login).
 
 ## API Endpoints
 
-### Authentication
-
-#### POST `/api/auth/login`
-Login with email and password
-```json
-{
-  "email": "admin@metadatatagging.com",
-  "password": "Admin123!"
-}
-```
-
-### Admin Endpoints (Requires Admin Role)
+> **Authentication**: All protected endpoints require an Azure AD Bearer token.
+> Obtain one via MSAL.js on the frontend with scope `api://<ClientId>/.default`.
 
 #### User Management
 - `GET /api/admin/users` - Get all users
@@ -250,36 +232,32 @@ Login with email and password
 
 ## Usage Examples
 
-### 1. Login as Admin
-```bash
-curl -X POST https://localhost:5001/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@metadatatagging.com","password":"Admin123!"}'
-```
+> In all examples, `ADMIN_TOKEN` / `TAGGER_TOKEN` / `SUPERVISOR_TOKEN` are Azure AD access tokens obtained via MSAL.js on the frontend.
 
-### 2. Create a Tagger User
+### 1. Create a Tagger User (admin pre-creates by email)
 ```bash
 curl -X POST https://localhost:5001/api/admin/users \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "username": "tagger1",
     "email": "tagger1@example.com",
-    "password": "Tagger123!",
     "role": "Tagger"
   }'
 ```
 
-### 3. List Blobs from Azure Storage
+> The user's `AzureObjectId` is set automatically when they first log in via Azure AD. The email must match their Microsoft account UPN.
+
+### 2. List Blobs from Azure Storage
 ```bash
 curl -X GET https://localhost:5001/api/admin/blobs \
-  -H "Authorization: Bearer YOUR_TOKEN"
+  -H "Authorization: Bearer ADMIN_TOKEN"
 ```
 
-### 3a. Preview Any Blob File (Before Assignment)
+### 3. Preview Any Blob File (Before Assignment)
 ```bash
 curl -X GET "https://localhost:5001/api/admin/blobs/document.pdf/preview?expiryMinutes=60" \
-  -H "Authorization: Bearer YOUR_TOKEN"
+  -H "Authorization: Bearer ADMIN_TOKEN"
 ```
 
 **Response:**
@@ -303,7 +281,7 @@ This allows you to preview any file in blob storage without needing to import or
 ### 4. Sync Files from Blob Storage
 ```bash
 curl -X POST https://localhost:5001/api/admin/sync-blobs \
-  -H "Authorization: Bearer YOUR_TOKEN"
+  -H "Authorization: Bearer ADMIN_TOKEN"
 ```
 
 This will import all files from Azure Blob Storage into the database for tracking and assignment.
@@ -311,7 +289,7 @@ This will import all files from Azure Blob Storage into the database for trackin
 ### 5. Assign Blob File to Tagger (Recommended Method)
 ```bash
 curl -X POST https://localhost:5001/api/admin/assign-blob-file \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "blobName": "document.pdf",
@@ -324,7 +302,7 @@ This will automatically import the file from blob storage if it doesn't exist in
 ### 6. Alternative: Assign Existing Database File
 ```bash
 curl -X POST https://localhost:5001/api/admin/assign-file \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "fileId": 1,
@@ -391,23 +369,26 @@ curl -X GET https://localhost:5001/api/admin/tagging-progress \
 ## Architecture & Design Patterns
 
 - **Options Pattern**: Type-safe configuration management using `IOptions<T>`
-  - `JwtSettings`: JWT authentication configuration
-  - `AzureBlobStorageSettings`: Azure Blob Storage connection settings
-  - `DefaultAdminSettings`: Default admin user configuration
+  - `AzureAdGroupMappingOptions`: Azure AD group-to-role mapping
+  - `StorageOptions` / `AzureStorageOptions`: file storage configuration
+  - `DatabaseOptions`: database provider configuration
+- **Claims Transformation**: `GroupRoleClaimsTransformation` converts Azure AD group claims into role claims at authentication time
+- **User Auto-Provisioning**: `UserProvisioningService` finds or creates a local `User` row on first request, preserving all FK relationships
 - **Dependency Injection**: Full DI implementation for services and repositories
 - **Repository Pattern**: Clean separation of data access logic
 - **DTO Pattern**: Data Transfer Objects for API requests/responses
 
 ## Security Features
 
-- **JWT Bearer Authentication**: Secure token-based authentication
-- **Role-Based Authorization**: Separate permissions for Admin and Tagger roles
+- **Azure Entra (MSAL) Authentication**: Token validation via OpenID Connect discovery — no static secret key
+- **Role-Based Authorization**: Separate permissions for Admin, Supervisor, and Tagger roles
+- **Group-to-Role Mapping**: Azure AD security group membership drives application roles
+- **User Auto-Provisioning**: Users are created/linked in the local DB on first Azure AD login
 - **SAS Token Generation**: Temporary, secure URLs for file access
   - Configurable expiry time (default: 60 minutes)
   - Read-only permissions
   - Automatic URL generation with Azure Storage SAS
 - **Access Control**: Taggers can only preview files assigned to them
-- **Password Hashing**: BCrypt for secure password storage
 - **CORS Configuration**: Configurable cross-origin resource sharing
 - **Soft Delete**: Users are deactivated rather than deleted
 - **Type-Safe Configuration**: Options pattern prevents configuration errors
@@ -465,10 +446,10 @@ const markdownText = await markdownResponse.text();
 
 ### Users Table
 - Id (PK)
-- Username (Unique)
+- Username
 - Email (Unique)
-- PasswordHash
-- Role (Admin/Tagger)
+- AzureObjectId (Unique, nullable — set on first Azure AD login)
+- Role (Admin/Tagger/Supervisor)
 - CreatedAt
 - LastLoginAt
 - IsActive
@@ -505,10 +486,9 @@ const markdownText = await markdownResponse.text();
 
 - ASP.NET Core 8.0 Web API
 - Entity Framework Core 8.0
-- SQLite
-- JWT Bearer Authentication
+- SQLite / PostgreSQL
+- Microsoft.Identity.Web (Azure AD token validation)
 - Azure Storage Blobs SDK
-- BCrypt.Net for password hashing
 - Swagger/OpenAPI for API documentation
 
 ## License

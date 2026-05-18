@@ -68,7 +68,6 @@ public class UserService : IUserService
         {
             Username = request.Username,
             Email = request.Email,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
             Role = request.Role,
             CreatedAt = DateTime.UtcNow,
             IsActive = true
@@ -142,11 +141,6 @@ public class UserService : IUserService
             }
 
             user.Email = request.Email;
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.Password))
-        {
-            user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
         }
 
         if (!string.IsNullOrWhiteSpace(request.Role))
