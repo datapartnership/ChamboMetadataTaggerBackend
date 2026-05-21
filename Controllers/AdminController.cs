@@ -5,7 +5,6 @@ using MetadataTagging.Data;
 using MetadataTagging.DTOs;
 using MetadataTagging.Models;
 using MetadataTagging.Services;
-using System.Security.Claims;
 
 namespace MetadataTagging.Controllers;
 
@@ -20,6 +19,7 @@ public class AdminController : ControllerBase
     private readonly ISupervisorService _supervisorService;
     private readonly ILogger<AdminController> _logger;
     private readonly ApplicationDbContext _dbContext;
+    private readonly IUserProvisioningService _userProvisioning;
 
     public AdminController(
         IUserService userService,
@@ -27,7 +27,8 @@ public class AdminController : ControllerBase
         IStorageService blobService,
         ISupervisorService supervisorService,
         ILogger<AdminController> logger,
-        ApplicationDbContext dbContext)
+        ApplicationDbContext dbContext,
+        IUserProvisioningService userProvisioning)
     {
         _userService = userService;
         _fileService = fileService;
@@ -35,6 +36,13 @@ public class AdminController : ControllerBase
         _supervisorService = supervisorService;
         _logger = logger;
         _dbContext = dbContext;
+        _userProvisioning = userProvisioning;
+    }
+
+    private async Task<int?> GetCurrentUserIdAsync()
+    {
+        var user = await _userProvisioning.GetOrCreateAsync(User);
+        return user?.Id;
     }
 
     [HttpGet("users")]
@@ -452,14 +460,11 @@ public class AdminController : ControllerBase
     {
         try
         {
-            var adminIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (adminIdClaim == null || !int.TryParse(adminIdClaim, out int adminId))
-            {
+            var adminId = await GetCurrentUserIdAsync();
+            if (adminId == null)
                 return Unauthorized(ApiResponse<bool>.ErrorResponse("Invalid admin credentials"));
-            }
 
-            var result = await _fileService.AssignFileToUserAsync(request.FileId, request.UserId, adminId);
+            var result = await _fileService.AssignFileToUserAsync(request.FileId, request.UserId, adminId.Value);
 
             if (!result)
             {
@@ -480,14 +485,11 @@ public class AdminController : ControllerBase
     {
         try
         {
-            var adminIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (adminIdClaim == null || !int.TryParse(adminIdClaim, out int adminId))
-            {
+            var adminId = await GetCurrentUserIdAsync();
+            if (adminId == null)
                 return Unauthorized(ApiResponse<bool>.ErrorResponse("Invalid admin credentials"));
-            }
 
-            var result = await _fileService.AssignBlobFileToUserAsync(request.BlobName, request.UserId, adminId);
+            var result = await _fileService.AssignBlobFileToUserAsync(request.BlobName, request.UserId, adminId.Value);
 
             if (!result)
             {
@@ -508,19 +510,16 @@ public class AdminController : ControllerBase
     {
         try
         {
-            var adminIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (adminIdClaim == null || !int.TryParse(adminIdClaim, out int adminId))
-            {
+            var adminId = await GetCurrentUserIdAsync();
+            if (adminId == null)
                 return Unauthorized(ApiResponse<AssignMultipleFilesResult>.ErrorResponse("Invalid admin credentials"));
-            }
 
             if (request.BlobNames == null || request.BlobNames.Count == 0)
             {
                 return BadRequest(ApiResponse<AssignMultipleFilesResult>.ErrorResponse("Blob names list cannot be empty"));
             }
 
-            var result = await _fileService.AssignMultipleFilesToUserAsync(request.BlobNames, request.UserId, adminId);
+            var result = await _fileService.AssignMultipleFilesToUserAsync(request.BlobNames, request.UserId, adminId.Value);
 
             if (result.SuccessfullyAssigned == 0)
             {
@@ -561,14 +560,11 @@ public class AdminController : ControllerBase
     {
         try
         {
-            var adminIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (adminIdClaim == null || !int.TryParse(adminIdClaim, out int adminId))
-            {
+            var adminId = await GetCurrentUserIdAsync();
+            if (adminId == null)
                 return Unauthorized(ApiResponse<bool>.ErrorResponse("Invalid admin credentials"));
-            }
 
-            var result = await _supervisorService.AssignStudentToSupervisorAsync(request.StudentId, request.SupervisorId, adminId);
+            var result = await _supervisorService.AssignStudentToSupervisorAsync(request.StudentId, request.SupervisorId, adminId.Value);
 
             if (!result)
             {
