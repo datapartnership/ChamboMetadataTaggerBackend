@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Mvc;
 using MetadataTagging.DTOs;
 using MetadataTagging.Models;
 using MetadataTagging.Services;
-using System.Security.Claims;
 
 namespace MetadataTagging.Controllers;
 
@@ -14,11 +13,19 @@ public class TaggerController : ControllerBase
 {
     private readonly IFileService _fileService;
     private readonly IStorageService _blobService;
+    private readonly IUserProvisioningService _userProvisioning;
 
-    public TaggerController(IFileService fileService, IStorageService blobService)
+    public TaggerController(IFileService fileService, IStorageService blobService, IUserProvisioningService userProvisioning)
     {
         _fileService = fileService;
         _blobService = blobService;
+        _userProvisioning = userProvisioning;
+    }
+
+    private async Task<int?> GetCurrentUserIdAsync()
+    {
+        var user = await _userProvisioning.GetOrCreateAsync(User);
+        return user?.Id;
     }
 
     [HttpGet("my-files")]
@@ -26,14 +33,11 @@ public class TaggerController : ControllerBase
     {
         try
         {
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (userIdClaim == null || !int.TryParse(userIdClaim, out int userId))
-            {
+            var userId = await GetCurrentUserIdAsync();
+            if (userId == null)
                 return Unauthorized(ApiResponse<IEnumerable<FileMetadataDto>>.ErrorResponse("Invalid user credentials"));
-            }
 
-            var files = await _fileService.GetFilesAssignedToUserAsync(userId);
+            var files = await _fileService.GetFilesAssignedToUserAsync(userId.Value);
             return Ok(ApiResponse<IEnumerable<FileMetadataDto>>.SuccessResponse(files));
         }
         catch (Exception ex)
@@ -47,21 +51,18 @@ public class TaggerController : ControllerBase
     {
         try
         {
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (userIdClaim == null || !int.TryParse(userIdClaim, out int userId))
-            {
+            var userId = await GetCurrentUserIdAsync();
+            if (userId == null)
                 return Unauthorized(ApiResponse<FileMetadataDto>.ErrorResponse("Invalid user credentials"));
-            }
 
-            var file = await _fileService.GetFileByIdAsync(fileId, userId);
+            var file = await _fileService.GetFileByIdAsync(fileId, userId.Value);
 
             if (file == null)
             {
                 return NotFound(ApiResponse<FileMetadataDto>.ErrorResponse("File not found"));
             }
 
-            if (!file.AssignedToUserIds.Contains(userId))
+            if (!file.AssignedToUserIds.Contains(userId.Value))
             {
                 return Forbid();
             }
@@ -79,19 +80,16 @@ public class TaggerController : ControllerBase
     {
         try
         {
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (userIdClaim == null || !int.TryParse(userIdClaim, out int userId))
-            {
+            var userId = await GetCurrentUserIdAsync();
+            if (userId == null)
                 return Unauthorized(ApiResponse<bool>.ErrorResponse("Invalid user credentials"));
-            }
 
             if (request.Tags == null || request.Tags.Count == 0)
             {
                 return BadRequest(ApiResponse<bool>.ErrorResponse("At least one tag is required"));
             }
 
-            var result = await _fileService.AddTagsToFileAsync(fileId, userId, request.Tags);
+            var result = await _fileService.AddTagsToFileAsync(fileId, userId.Value, request.Tags);
 
             if (!result)
             {
@@ -111,14 +109,11 @@ public class TaggerController : ControllerBase
     {
         try
         {
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (userIdClaim == null || !int.TryParse(userIdClaim, out int userId))
-            {
+            var userId = await GetCurrentUserIdAsync();
+            if (userId == null)
                 return Unauthorized(ApiResponse<bool>.ErrorResponse("Invalid user credentials"));
-            }
 
-            var result = await _fileService.CompleteFileTaggingAsync(fileId, userId);
+            var result = await _fileService.CompleteFileTaggingAsync(fileId, userId.Value);
 
             if (!result)
             {
@@ -138,12 +133,9 @@ public class TaggerController : ControllerBase
     {
         try
         {
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (userIdClaim == null || !int.TryParse(userIdClaim, out int userId))
-            {
+            var userId = await GetCurrentUserIdAsync();
+            if (userId == null)
                 return Unauthorized(ApiResponse<FilePreviewDto>.ErrorResponse("Invalid user credentials"));
-            }
 
             var file = await _fileService.GetFileByIdAsync(fileId);
 
@@ -152,7 +144,7 @@ public class TaggerController : ControllerBase
                 return NotFound(ApiResponse<FilePreviewDto>.ErrorResponse("File not found"));
             }
 
-            if (!file.AssignedToUserIds.Contains(userId))
+            if (!file.AssignedToUserIds.Contains(userId.Value))
             {
                 return Forbid();
             }
@@ -194,12 +186,9 @@ public class TaggerController : ControllerBase
     {
         try
         {
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (userIdClaim == null || !int.TryParse(userIdClaim, out int userId))
-            {
+            var userId = await GetCurrentUserIdAsync();
+            if (userId == null)
                 return Unauthorized(ApiResponse<bool>.ErrorResponse("Invalid user credentials"));
-            }
 
             var file = await _fileService.GetFileByIdAsync(fileId);
 
@@ -208,7 +197,7 @@ public class TaggerController : ControllerBase
                 return NotFound(ApiResponse<bool>.ErrorResponse("File not found"));
             }
 
-            if (!file.AssignedToUserIds.Contains(userId))
+            if (!file.AssignedToUserIds.Contains(userId.Value))
             {
                 return Forbid();
             }
@@ -233,12 +222,9 @@ public class TaggerController : ControllerBase
     {
         try
         {
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (userIdClaim == null || !int.TryParse(userIdClaim, out int userId))
-            {
+            var userId = await GetCurrentUserIdAsync();
+            if (userId == null)
                 return Unauthorized();
-            }
 
             var file = await _fileService.GetFileByIdAsync(fileId);
 
@@ -247,7 +233,7 @@ public class TaggerController : ControllerBase
                 return NotFound("File not found");
             }
 
-            if (!file.AssignedToUserIds.Contains(userId))
+            if (!file.AssignedToUserIds.Contains(userId.Value))
             {
                 return Forbid();
             }

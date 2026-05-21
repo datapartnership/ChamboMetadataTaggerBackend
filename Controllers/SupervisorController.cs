@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Mvc;
 using MetadataTagging.DTOs;
 using MetadataTagging.Models;
 using MetadataTagging.Services;
-using System.Security.Claims;
 
 namespace MetadataTagging.Controllers;
 
@@ -15,15 +14,24 @@ public class SupervisorController : ControllerBase
     private readonly ISupervisorService _supervisorService;
     private readonly IStorageService _blobService;
     private readonly IFileService _fileService;
+    private readonly IUserProvisioningService _userProvisioning;
 
     public SupervisorController(
         ISupervisorService supervisorService,
         IStorageService blobService,
-        IFileService fileService)
+        IFileService fileService,
+        IUserProvisioningService userProvisioning)
     {
         _supervisorService = supervisorService;
         _blobService = blobService;
         _fileService = fileService;
+        _userProvisioning = userProvisioning;
+    }
+
+    private async Task<int?> GetCurrentUserIdAsync()
+    {
+        var user = await _userProvisioning.GetOrCreateAsync(User);
+        return user?.Id;
     }
 
     [HttpGet("my-students")]
@@ -31,14 +39,11 @@ public class SupervisorController : ControllerBase
     {
         try
         {
-            var supervisorIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
-            {
+            var supervisorId = await GetCurrentUserIdAsync();
+            if (supervisorId == null)
                 return Unauthorized(ApiResponse<IEnumerable<StudentWithStatsDto>>.ErrorResponse("Invalid supervisor credentials"));
-            }
 
-            var students = await _supervisorService.GetSupervisorStudentsAsync(supervisorId);
+            var students = await _supervisorService.GetSupervisorStudentsAsync(supervisorId.Value);
             return Ok(ApiResponse<IEnumerable<StudentWithStatsDto>>.SuccessResponse(students));
         }
         catch (Exception ex)
@@ -52,14 +57,11 @@ public class SupervisorController : ControllerBase
     {
         try
         {
-            var supervisorIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
-            {
+            var supervisorId = await GetCurrentUserIdAsync();
+            if (supervisorId == null)
                 return Unauthorized(ApiResponse<IEnumerable<SupervisorReviewDto>>.ErrorResponse("Invalid supervisor credentials"));
-            }
 
-            var files = await _supervisorService.GetStudentFilesForReviewAsync(supervisorId, studentId);
+            var files = await _supervisorService.GetStudentFilesForReviewAsync(supervisorId.Value, studentId);
             return Ok(ApiResponse<IEnumerable<SupervisorReviewDto>>.SuccessResponse(files));
         }
         catch (Exception ex)
@@ -73,14 +75,11 @@ public class SupervisorController : ControllerBase
     {
         try
         {
-            var supervisorIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
-            {
+            var supervisorId = await GetCurrentUserIdAsync();
+            if (supervisorId == null)
                 return Unauthorized(ApiResponse<IEnumerable<SupervisorReviewDto>>.ErrorResponse("Invalid supervisor credentials"));
-            }
 
-            var files = await _supervisorService.GetAllStudentFilesForSupervisorAsync(supervisorId);
+            var files = await _supervisorService.GetAllStudentFilesForSupervisorAsync(supervisorId.Value);
             return Ok(ApiResponse<IEnumerable<SupervisorReviewDto>>.SuccessResponse(files));
         }
         catch (Exception ex)
@@ -94,12 +93,9 @@ public class SupervisorController : ControllerBase
     {
         try
         {
-            var supervisorIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
-            {
+            var supervisorId = await GetCurrentUserIdAsync();
+            if (supervisorId == null)
                 return Unauthorized(ApiResponse<FilePreviewDto>.ErrorResponse("Invalid supervisor credentials"));
-            }
 
             var file = await _fileService.GetFileByIdAsync(fileId);
 
@@ -108,7 +104,7 @@ public class SupervisorController : ControllerBase
                 return NotFound(ApiResponse<FilePreviewDto>.ErrorResponse("File not found"));
             }
 
-            var studentFiles = await _supervisorService.GetAllStudentFilesForSupervisorAsync(supervisorId);
+            var studentFiles = await _supervisorService.GetAllStudentFilesForSupervisorAsync(supervisorId.Value);
             var canAccess = studentFiles.Any(f => f.FileId == fileId);
 
             if (!canAccess)
@@ -153,12 +149,9 @@ public class SupervisorController : ControllerBase
     {
         try
         {
-            var supervisorIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
-            {
+            var supervisorId = await GetCurrentUserIdAsync();
+            if (supervisorId == null)
                 return Unauthorized();
-            }
 
             var file = await _fileService.GetFileByIdAsync(fileId);
 
@@ -167,7 +160,7 @@ public class SupervisorController : ControllerBase
                 return NotFound("File not found");
             }
 
-            var studentFiles = await _supervisorService.GetAllStudentFilesForSupervisorAsync(supervisorId);
+            var studentFiles = await _supervisorService.GetAllStudentFilesForSupervisorAsync(supervisorId.Value);
             var canAccess = studentFiles.Any(f => f.FileId == fileId);
 
             if (!canAccess)
@@ -231,17 +224,14 @@ public class SupervisorController : ControllerBase
     {
         try
         {
-            var supervisorIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
-            {
+            var supervisorId = await GetCurrentUserIdAsync();
+            if (supervisorId == null)
                 return Unauthorized(ApiResponse<bool>.ErrorResponse("Invalid supervisor credentials"));
-            }
 
             var result = await _supervisorService.MarkFileAsCheckedAsync(
                 request.FileId,
                 request.StudentId,
-                supervisorId,
+                supervisorId.Value,
                 request.Notes);
 
             if (!result)
@@ -262,17 +252,14 @@ public class SupervisorController : ControllerBase
     {
         try
         {
-            var supervisorIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
-            {
+            var supervisorId = await GetCurrentUserIdAsync();
+            if (supervisorId == null)
                 return Unauthorized(ApiResponse<bool>.ErrorResponse("Invalid supervisor credentials"));
-            }
 
             var result = await _supervisorService.SendBackToTaggerAsync(
                 request.FileId,
                 request.StudentId,
-                supervisorId,
+                supervisorId.Value,
                 request.Notes);
 
             if (!result)
@@ -293,12 +280,9 @@ public class SupervisorController : ControllerBase
     {
         try
         {
-            var supervisorIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
-            {
+            var supervisorId = await GetCurrentUserIdAsync();
+            if (supervisorId == null)
                 return Unauthorized(ApiResponse<bool>.ErrorResponse("Invalid supervisor credentials"));
-            }
 
             if (request.Tags == null || request.Tags.Count == 0)
             {
@@ -308,7 +292,7 @@ public class SupervisorController : ControllerBase
             var result = await _supervisorService.EditFileTagsAsync(
                 fileId,
                 request.StudentId,
-                supervisorId,
+                supervisorId.Value,
                 request.Tags,
                 request.Notes);
 
