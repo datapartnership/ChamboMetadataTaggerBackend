@@ -138,10 +138,10 @@ using (var scope = app.Services.CreateScope())
 
 }
 
-app.UseDefaultFiles(new DefaultFilesOptions
-{
-    DefaultFileNames = new List<string> { "index.html" }
-});
+//app.UseDefaultFiles(new DefaultFilesOptions
+//{
+//    DefaultFileNames = new List<string> { "index.html" }
+//});
 
 //app.UseStaticFiles();
 
