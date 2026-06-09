@@ -16,7 +16,7 @@ public class User
 
 public static class UserRoles
 {
-    public const string Admin = "Admin";
-    public const string Tagger = "Tagger";
-    public const string Supervisor = "Supervisor";
+    public const string Admin = "admin";
+    public const string Tagger = "tagger";
+    public const string Supervisor = "supervisor";
 }
