@@ -131,8 +131,9 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-using (var scope = app.Services.CreateScope())
+try
 {
+    using var scope = app.Services.CreateScope();
     var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     dbContext.Database.EnsureCreated();
 
@@ -144,6 +145,10 @@ using (var scope = app.Services.CreateScope())
         u.Role = u.Role.ToLowerInvariant();
     if (legacyRoleUsers.Count > 0)
         dbContext.SaveChanges();
+}
+catch (Exception ex)
+{
+    app.Logger.LogError(ex, "Database initialization failed at startup. The application will continue, but database operations may fail until connectivity is restored.");
 }
 
 //app.UseDefaultFiles(new DefaultFilesOptions
