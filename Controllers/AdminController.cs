@@ -621,18 +621,13 @@ public class AdminController : ControllerBase
     {
         try
         {
-            _logger.LogWarning("Database reset initiated by admin");
+            _logger.LogWarning("Database reset (drop + recreate) initiated by admin");
 
-            await _dbContext.FileTags.ExecuteDeleteAsync();
-            await _dbContext.FileAssignments.ExecuteDeleteAsync();
-            await _dbContext.StudentSupervisors.ExecuteDeleteAsync();
-            await _dbContext.FileMetadata.ExecuteDeleteAsync();
-            await _dbContext.Users
-                .Where(u => u.Role != UserRoles.Admin)
-                .ExecuteDeleteAsync();
+            await _dbContext.Database.EnsureDeletedAsync();
+            await _dbContext.Database.EnsureCreatedAsync();
 
-            _logger.LogWarning("Database reset completed successfully");
-            return Ok(ApiResponse<bool>.SuccessResponse(true, "Database reset successfully. All non-admin data has been cleared."));
+            _logger.LogWarning("Database reset completed: all tables dropped and schema recreated");
+            return Ok(ApiResponse<bool>.SuccessResponse(true, "Database reset successfully. All tables have been dropped and the schema has been recreated."));
         }
         catch (Exception ex)
         {
