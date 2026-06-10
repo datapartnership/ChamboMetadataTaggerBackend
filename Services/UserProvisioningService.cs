@@ -25,7 +25,15 @@ public class UserProvisioningService : IUserProvisioningService
         // Try to find by Azure Object ID (fast path for returning users)
         var user = await _context.Users.FirstOrDefaultAsync(u => u.AzureObjectId == oid);
         if (user != null)
+        {
+            // Sync role from current group membership and record login time
+            var currentRole = ResolveRole(principal);
+            if (!string.IsNullOrEmpty(currentRole) && user.Role != currentRole)
+                user.Role = currentRole;
+            user.LastLoginAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
             return user;
+        }
 
         var email = principal.FindFirst("preferred_username")?.Value
                  ?? principal.FindFirst(ClaimTypes.Email)?.Value
