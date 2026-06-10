@@ -21,7 +21,10 @@ public class AzureBlobService : IStorageService
         if (settings.UseManagedIdentity)
         {
             var serviceUri = new Uri($"https://{settings.AccountName}.blob.core.windows.net");
-            blobServiceClient = new BlobServiceClient(serviceUri, new DefaultAzureCredential());
+            var credentialOptions = new DefaultAzureCredentialOptions();
+            if (!string.IsNullOrEmpty(settings.ManagedIdentityClientId))
+                credentialOptions.ManagedIdentityClientId = settings.ManagedIdentityClientId;
+            blobServiceClient = new BlobServiceClient(serviceUri, new DefaultAzureCredential(credentialOptions));
         }
         else
         {
