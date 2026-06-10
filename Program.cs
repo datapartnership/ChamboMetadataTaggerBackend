@@ -137,6 +137,13 @@ try
     var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     dbContext.Database.EnsureCreated();
 
+    // Apply any schema columns that may have been added after the DB was first created
+    // (EnsureCreated does not alter existing tables)
+    dbContext.Database.ExecuteSqlRaw("""
+        ALTER TABLE IF EXISTS "Users"
+            ADD COLUMN IF NOT EXISTS "AzureObjectId" character varying(36);
+        """);
+
     // Migrate any legacy capitalised role values to the lowercase app role names
     var legacyRoleUsers = dbContext.Users
         .Where(u => u.Role == "Admin" || u.Role == "Supervisor" || u.Role == "Tagger")
