@@ -28,7 +28,15 @@ public class AzureBlobService : IStorageService
             blobServiceClient = new BlobServiceClient(settings.ConnectionString);
         }
         _containerClient = blobServiceClient.GetBlobContainerClient(settings.ContainerName);
-        _containerClient.CreateIfNotExists();
+        try
+        {
+            _containerClient.CreateIfNotExists();
+        }
+        catch (Exception ex)
+        {
+            // Container may already exist or credentials unavailable at startup — log and continue
+            Console.Error.WriteLine($"[AzureBlobService] Could not ensure blob container exists: {ex.Message}");
+        }
     }
 
     public async Task<IEnumerable<BlobFileDto>> ListBlobsAsync(string? prefix = null)
