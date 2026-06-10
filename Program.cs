@@ -1,5 +1,5 @@
 using Azure.Identity;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Identity.Web;
 using Microsoft.OpenApi.Models;
@@ -16,6 +16,7 @@ builder.Services.Configure<S3StorageOptions>(builder.Configuration.GetSection("S
 builder.Services.Configure<AzureStorageOptions>(builder.Configuration.GetSection("Storage:AzureStorage"));
 builder.Services.Configure<DatabaseOptions>(builder.Configuration.GetSection(DatabaseOptions.Section));
 builder.Services.Configure<MetadataTagger.Options.CorsOptions>(builder.Configuration.GetSection(MetadataTagger.Options.CorsOptions.Section));
+builder.Services.Configure<AzureAdGroupMappingOptions>(builder.Configuration.GetSection(AzureAdGroupMappingOptions.Section));
 
 var dbOptions = builder.Configuration.GetSection(DatabaseOptions.Section).Get<DatabaseOptions>()
     ?? new DatabaseOptions();
@@ -69,8 +70,7 @@ else
 builder.Services.AddScoped<ISupervisorService, SupervisorService>();
 
 builder.Services.AddMicrosoftIdentityWebApiAuthentication(builder.Configuration);
-builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, opts =>
-    opts.TokenValidationParameters.RoleClaimType = "roles");
+builder.Services.AddScoped<IClaimsTransformation, GroupRoleClaimsTransformation>();
 builder.Services.AddAuthorization();
 
 builder.Services.AddControllers();
@@ -131,8 +131,9 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-using (var scope = app.Services.CreateScope())
+try
 {
+    using var scope = app.Services.CreateScope();
     var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     dbContext.Database.EnsureCreated();
 
@@ -144,6 +145,10 @@ using (var scope = app.Services.CreateScope())
         u.Role = u.Role.ToLowerInvariant();
     if (legacyRoleUsers.Count > 0)
         dbContext.SaveChanges();
+}
+catch (Exception ex)
+{
+    app.Logger.LogError(ex, "Database initialization failed at startup. The application will continue, but database operations may fail until connectivity is restored.");
 }
 
 //app.UseDefaultFiles(new DefaultFilesOptions
