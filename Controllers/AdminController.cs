@@ -666,6 +666,59 @@ public class AdminController : ControllerBase
         }
     }
 
+    [HttpGet("export/annotations")]
+    public async Task<IActionResult> ExportAnnotationsCsv()
+    {
+        try
+        {
+            var files = await _dbContext.FileMetadata
+                .Include(f => f.Tags)
+                .Where(f => f.Status == FileTaggingStatus.SubmittedToSupervisor ||
+                            f.Status == FileTaggingStatus.ApprovedBySupervisor)
+                .OrderBy(f => f.Id)
+                .AsNoTracking()
+                .ToListAsync();
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("FileId,FilePath,Status,Keywords,Themes");
+
+            foreach (var file in files)
+            {
+                var keywords = file.Tags
+                    .Where(t => t.TagKey.Equals("keyword", StringComparison.OrdinalIgnoreCase))
+                    .Select(t => t.TagValue);
+
+                var themes = file.Tags
+                    .Where(t => t.TagKey.Equals("theme", StringComparison.OrdinalIgnoreCase))
+                    .Select(t => t.TagValue);
+
+                sb.AppendLine(string.Join(",", new[]
+                {
+                    file.Id.ToString(),
+                    CsvEscape(file.BlobName ?? file.FileName),
+                    file.Status.ToString(),
+                    CsvEscape(string.Join("|", keywords)),
+                    CsvEscape(string.Join("|", themes))
+                }));
+            }
+
+            var bytes = System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+            return File(bytes, "text/csv", $"annotations_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error occurred while exporting annotations CSV");
+            return StatusCode(500, ApiResponse<object>.ErrorResponse($"An error occurred: {ex.Message}"));
+        }
+    }
+
+    private static string CsvEscape(string value)
+    {
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+            return $"\"{value.Replace("\"", "\"\"")}\"";
+        return value;
+    }
+
     private async Task<IActionResult> HandleRangeRequest(string blobName, string contentType, string rangeHeader)
     {
         var rangeValue = rangeHeader.Replace("bytes=", "");
