@@ -685,11 +685,11 @@ public class AdminController : ControllerBase
             foreach (var file in files)
             {
                 var keywords = file.Tags
-                    .Where(t => t.TagKey.Equals("keyword", StringComparison.OrdinalIgnoreCase))
+                    .Where(t => t.TagKey.Equals("Keywords", StringComparison.OrdinalIgnoreCase))
                     .Select(t => t.TagValue);
 
                 var themes = file.Tags
-                    .Where(t => t.TagKey.Equals("theme", StringComparison.OrdinalIgnoreCase))
+                    .Where(t => t.TagKey.Equals("Theme", StringComparison.OrdinalIgnoreCase))
                     .Select(t => t.TagValue);
 
                 sb.AppendLine(string.Join(",", new[]
