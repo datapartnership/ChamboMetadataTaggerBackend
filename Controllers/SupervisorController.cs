@@ -27,7 +27,7 @@ public class SupervisorController : ControllerBase
     }
 
     [HttpGet("my-students")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<StudentWithStatsDto>>>> GetMyStudents()
+    public async Task<ActionResult<ApiResponse<PagedResponse<StudentWithStatsDto>>>> GetMyStudents([FromQuery] PaginationParams pagination)
     {
         try
         {
@@ -35,20 +35,20 @@ public class SupervisorController : ControllerBase
 
             if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
             {
-                return Unauthorized(ApiResponse<IEnumerable<StudentWithStatsDto>>.ErrorResponse("Invalid supervisor credentials"));
+                return Unauthorized(ApiResponse<PagedResponse<StudentWithStatsDto>>.ErrorResponse("Invalid supervisor credentials"));
             }
 
-            var students = await _supervisorService.GetSupervisorStudentsAsync(supervisorId);
-            return Ok(ApiResponse<IEnumerable<StudentWithStatsDto>>.SuccessResponse(students));
+            var students = await _supervisorService.GetSupervisorStudentsAsync(supervisorId, pagination);
+            return Ok(ApiResponse<PagedResponse<StudentWithStatsDto>>.SuccessResponse(students));
         }
         catch (Exception ex)
         {
-            return StatusCode(500, ApiResponse<IEnumerable<StudentWithStatsDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<PagedResponse<StudentWithStatsDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
     [HttpGet("students/{studentId}/files")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<SupervisorReviewDto>>>> GetStudentFiles(int studentId)
+    public async Task<ActionResult<ApiResponse<PagedResponse<SupervisorReviewDto>>>> GetStudentFiles(int studentId, [FromQuery] PaginationParams pagination)
     {
         try
         {
@@ -56,20 +56,20 @@ public class SupervisorController : ControllerBase
 
             if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
             {
-                return Unauthorized(ApiResponse<IEnumerable<SupervisorReviewDto>>.ErrorResponse("Invalid supervisor credentials"));
+                return Unauthorized(ApiResponse<PagedResponse<SupervisorReviewDto>>.ErrorResponse("Invalid supervisor credentials"));
             }
 
-            var files = await _supervisorService.GetStudentFilesForReviewAsync(supervisorId, studentId);
-            return Ok(ApiResponse<IEnumerable<SupervisorReviewDto>>.SuccessResponse(files));
+            var files = await _supervisorService.GetStudentFilesForReviewAsync(supervisorId, studentId, pagination);
+            return Ok(ApiResponse<PagedResponse<SupervisorReviewDto>>.SuccessResponse(files));
         }
         catch (Exception ex)
         {
-            return StatusCode(500, ApiResponse<IEnumerable<SupervisorReviewDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<PagedResponse<SupervisorReviewDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
     [HttpGet("all-student-files")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<SupervisorReviewDto>>>> GetAllStudentFiles()
+    public async Task<ActionResult<ApiResponse<PagedResponse<SupervisorReviewDto>>>> GetAllStudentFiles([FromQuery] PaginationParams pagination)
     {
         try
         {
@@ -77,15 +77,15 @@ public class SupervisorController : ControllerBase
 
             if (supervisorIdClaim == null || !int.TryParse(supervisorIdClaim, out int supervisorId))
             {
-                return Unauthorized(ApiResponse<IEnumerable<SupervisorReviewDto>>.ErrorResponse("Invalid supervisor credentials"));
+                return Unauthorized(ApiResponse<PagedResponse<SupervisorReviewDto>>.ErrorResponse("Invalid supervisor credentials"));
             }
 
-            var files = await _supervisorService.GetAllStudentFilesForSupervisorAsync(supervisorId);
-            return Ok(ApiResponse<IEnumerable<SupervisorReviewDto>>.SuccessResponse(files));
+            var files = await _supervisorService.GetAllStudentFilesForSupervisorAsync(supervisorId, pagination);
+            return Ok(ApiResponse<PagedResponse<SupervisorReviewDto>>.SuccessResponse(files));
         }
         catch (Exception ex)
         {
-            return StatusCode(500, ApiResponse<IEnumerable<SupervisorReviewDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<PagedResponse<SupervisorReviewDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
@@ -108,8 +108,7 @@ public class SupervisorController : ControllerBase
                 return NotFound(ApiResponse<FilePreviewDto>.ErrorResponse("File not found"));
             }
 
-            var studentFiles = await _supervisorService.GetAllStudentFilesForSupervisorAsync(supervisorId);
-            var canAccess = studentFiles.Any(f => f.FileId == fileId);
+            var canAccess = await _supervisorService.CanSupervisorAccessFileAsync(supervisorId, fileId);
 
             if (!canAccess)
             {
@@ -167,8 +166,7 @@ public class SupervisorController : ControllerBase
                 return NotFound("File not found");
             }
 
-            var studentFiles = await _supervisorService.GetAllStudentFilesForSupervisorAsync(supervisorId);
-            var canAccess = studentFiles.Any(f => f.FileId == fileId);
+            var canAccess = await _supervisorService.CanSupervisorAccessFileAsync(supervisorId, fileId);
 
             if (!canAccess)
             {

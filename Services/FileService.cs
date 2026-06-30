@@ -16,14 +16,48 @@ public class FileService : IFileService
         _blobService = blobService;
     }
 
-    public async Task<IEnumerable<FileMetadataDto>> GetAllFilesAsync()
+    public async Task<PagedResponse<FileMetadataDto>> GetAllFilesAsync(PaginationParams pagination)
     {
-        var files = await _context.FileMetadata
+        IQueryable<FileMetadata> query = _context.FileMetadata
             .Include(f => f.FileAssignments)
-            .Include(f => f.Tags)
+            .Include(f => f.Tags);
+
+        query = pagination.SortBy?.ToLowerInvariant() switch
+        {
+            "filename" => pagination.IsDescending
+                ? query.OrderByDescending(f => f.FileName)
+                : query.OrderBy(f => f.FileName),
+            "filesize" => pagination.IsDescending
+                ? query.OrderByDescending(f => f.FileSize)
+                : query.OrderBy(f => f.FileSize),
+            "status" => pagination.IsDescending
+                ? query.OrderByDescending(f => f.Status)
+                : query.OrderBy(f => f.Status),
+            "contenttype" => pagination.IsDescending
+                ? query.OrderByDescending(f => f.ContentType)
+                : query.OrderBy(f => f.ContentType),
+            "durationseconds" => pagination.IsDescending
+                ? query.OrderByDescending(f => f.DurationSeconds)
+                : query.OrderBy(f => f.DurationSeconds),
+            _ => pagination.IsDescending
+                ? query.OrderByDescending(f => f.UploadedAt)
+                : query.OrderBy(f => f.UploadedAt),
+        };
+
+        var totalCount = await query.CountAsync();
+
+        var files = await query
+            .Skip((pagination.Page - 1) * pagination.PageSize)
+            .Take(pagination.PageSize)
             .ToListAsync();
 
-        return files.Select(f => MapToDto(f));
+        return new PagedResponse<FileMetadataDto>
+        {
+            Items = files.Select(f => MapToDto(f)),
+            Page = pagination.Page,
+            PageSize = pagination.PageSize,
+            TotalCount = totalCount
+        };
     }
 
     public async Task<FileMetadataDto?> GetFileByIdAsync(int fileId, int? userId = null)
@@ -284,17 +318,45 @@ public class FileService : IFileService
         return result;
     }
 
-    public async Task<IEnumerable<FileMetadataDto>> GetFilesAssignedToUserAsync(int userId)
+    public async Task<PagedResponse<FileMetadataDto>> GetFilesAssignedToUserAsync(int userId, PaginationParams pagination)
     {
-        var assignments = await _context.FileAssignments
+        IQueryable<FileAssignment> query = _context.FileAssignments
             .Where(fa => fa.UserId == userId)
             .Include(fa => fa.FileMetadata)
                 .ThenInclude(f => f.Tags)
             .Include(fa => fa.FileMetadata)
-                .ThenInclude(f => f.FileAssignments)
+                .ThenInclude(f => f.FileAssignments);
+
+        query = pagination.SortBy?.ToLowerInvariant() switch
+        {
+            "filename" => pagination.IsDescending
+                ? query.OrderByDescending(fa => fa.FileMetadata.FileName)
+                : query.OrderBy(fa => fa.FileMetadata.FileName),
+            "filesize" => pagination.IsDescending
+                ? query.OrderByDescending(fa => fa.FileMetadata.FileSize)
+                : query.OrderBy(fa => fa.FileMetadata.FileSize),
+            "status" => pagination.IsDescending
+                ? query.OrderByDescending(fa => fa.FileMetadata.Status)
+                : query.OrderBy(fa => fa.FileMetadata.Status),
+            _ => pagination.IsDescending
+                ? query.OrderByDescending(fa => fa.FileMetadata.UploadedAt)
+                : query.OrderBy(fa => fa.FileMetadata.UploadedAt),
+        };
+
+        var totalCount = await query.CountAsync();
+
+        var assignments = await query
+            .Skip((pagination.Page - 1) * pagination.PageSize)
+            .Take(pagination.PageSize)
             .ToListAsync();
 
-        return assignments.Select(fa => MapToDto(fa.FileMetadata, fa)).ToList();
+        return new PagedResponse<FileMetadataDto>
+        {
+            Items = assignments.Select(fa => MapToDto(fa.FileMetadata, fa)),
+            Page = pagination.Page,
+            PageSize = pagination.PageSize,
+            TotalCount = totalCount
+        };
     }
 
     public async Task<bool> AddTagsToFileAsync(int fileId, int userId, List<TagDto> tags)
@@ -373,46 +435,117 @@ public class FileService : IFileService
         return true;
     }
 
-    public async Task<IEnumerable<TaggingProgressDto>> GetTaggingProgressAsync()
+    public async Task<PagedResponse<TaggingProgressDto>> GetTaggingProgressAsync(PaginationParams pagination)
     {
-        var assignments = await _context.FileAssignments
-            .Include(fa => fa.User)
-            .Include(fa => fa.FileMetadata)
+        var userStatsQuery = _context.Users
+            .Where(u => u.FileAssignments.Any())
+            .Select(u => new
+            {
+                UserId = u.Id,
+                Username = u.Username,
+                TotalAssigned = u.FileAssignments.Count(),
+                TotalInProgress = u.FileAssignments.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.Assigned),
+                TotalSubmitted = u.FileAssignments.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.SubmittedToSupervisor),
+                TotalSentBack = u.FileAssignments.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.SendBackToTagger),
+                TotalApproved = u.FileAssignments.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.ApprovedBySupervisor)
+            });
+
+        userStatsQuery = pagination.SortBy?.ToLowerInvariant() switch
+        {
+            "username" => pagination.IsDescending
+                ? userStatsQuery.OrderByDescending(u => u.Username)
+                : userStatsQuery.OrderBy(u => u.Username),
+            "totalassigned" => pagination.IsDescending
+                ? userStatsQuery.OrderByDescending(u => u.TotalAssigned)
+                : userStatsQuery.OrderBy(u => u.TotalAssigned),
+            "totalapproved" => pagination.IsDescending
+                ? userStatsQuery.OrderByDescending(u => u.TotalApproved)
+                : userStatsQuery.OrderBy(u => u.TotalApproved),
+            _ => userStatsQuery.OrderBy(u => u.Username)
+        };
+
+        var totalCount = await userStatsQuery.CountAsync();
+
+        var userStats = await userStatsQuery
+            .Skip((pagination.Page - 1) * pagination.PageSize)
+            .Take(pagination.PageSize)
             .ToListAsync();
 
-        var progress = assignments
-            .GroupBy(fa => fa.User)
-            .Select(g => new TaggingProgressDto
-            {
-                UserId = g.Key.Id,
-                Username = g.Key.Username,
-                TotalAssigned = g.Count(),
-                TotalInProgress = g.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.Assigned),
-                TotalSubmitted = g.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.SubmittedToSupervisor),
-                TotalSentBack = g.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.SendBackToTagger),
-                TotalApproved = g.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.ApprovedBySupervisor),
-                CompletedFiles = g.Where(fa => fa.IsCompleted)
-                    .Select(fa => new CompletedFileDto
-                    {
-                        FileId = fa.FileMetadataId,
-                        FileName = fa.FileMetadata.FileName,
-                        CompletedAt = fa.CompletedAt
-                    })
-                    .ToList()
-            })
-            .ToList();
+        var userIds = userStats.Select(u => u.UserId).ToList();
 
-        return progress;
+        var completedFilesRaw = await _context.FileAssignments
+            .Where(fa => userIds.Contains(fa.UserId) && fa.IsCompleted)
+            .Select(fa => new { fa.UserId, fa.FileMetadataId, fa.FileMetadata.FileName, fa.CompletedAt })
+            .ToListAsync();
+
+        var completedFilesByUser = completedFilesRaw
+            .GroupBy(cf => cf.UserId)
+            .ToDictionary(g => g.Key, g => g
+                .OrderByDescending(cf => cf.CompletedAt)
+                .Take(10)
+                .Select(cf => new CompletedFileDto
+                {
+                    FileId = cf.FileMetadataId,
+                    FileName = cf.FileName,
+                    CompletedAt = cf.CompletedAt
+                })
+                .ToList());
+
+        return new PagedResponse<TaggingProgressDto>
+        {
+            Items = userStats.Select(u => new TaggingProgressDto
+            {
+                UserId = u.UserId,
+                Username = u.Username,
+                TotalAssigned = u.TotalAssigned,
+                TotalInProgress = u.TotalInProgress,
+                TotalSubmitted = u.TotalSubmitted,
+                TotalSentBack = u.TotalSentBack,
+                TotalApproved = u.TotalApproved,
+                CompletedFiles = completedFilesByUser.GetValueOrDefault(u.UserId) ?? new List<CompletedFileDto>()
+            }),
+            Page = pagination.Page,
+            PageSize = pagination.PageSize,
+            TotalCount = totalCount
+        };
     }
 
-    public async Task<IEnumerable<FileMetadataDto>> GetUnassignedFilesAsync()
+    public async Task<PagedResponse<FileMetadataDto>> GetUnassignedFilesAsync(PaginationParams pagination)
     {
-        var files = await _context.FileMetadata
+        IQueryable<FileMetadata> query = _context.FileMetadata
             .Where(f => f.Status == FileTaggingStatus.Unassigned)
-            .Include(f => f.Tags)
+            .Include(f => f.Tags);
+
+        query = pagination.SortBy?.ToLowerInvariant() switch
+        {
+            "filename" => pagination.IsDescending
+                ? query.OrderByDescending(f => f.FileName)
+                : query.OrderBy(f => f.FileName),
+            "filesize" => pagination.IsDescending
+                ? query.OrderByDescending(f => f.FileSize)
+                : query.OrderBy(f => f.FileSize),
+            "contenttype" => pagination.IsDescending
+                ? query.OrderByDescending(f => f.ContentType)
+                : query.OrderBy(f => f.ContentType),
+            _ => pagination.IsDescending
+                ? query.OrderByDescending(f => f.UploadedAt)
+                : query.OrderBy(f => f.UploadedAt),
+        };
+
+        var totalCount = await query.CountAsync();
+
+        var files = await query
+            .Skip((pagination.Page - 1) * pagination.PageSize)
+            .Take(pagination.PageSize)
             .ToListAsync();
 
-        return files.Select(f => MapToDto(f));
+        return new PagedResponse<FileMetadataDto>
+        {
+            Items = files.Select(f => MapToDto(f)),
+            Page = pagination.Page,
+            PageSize = pagination.PageSize,
+            TotalCount = totalCount
+        };
     }
 
     public async Task<bool> UpdateAudioMetadataAsync(int fileId, double durationSeconds)

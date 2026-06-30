@@ -14,10 +14,32 @@ public class UserService : IUserService
         _context = context;
     }
 
-    public async Task<IEnumerable<UserDto>> GetAllUsersAsync()
+    public async Task<PagedResponse<UserDto>> GetAllUsersAsync(PaginationParams pagination)
     {
-        var users = await _context.Users
-            .Where(u => u.IsActive)
+        IQueryable<User> query = _context.Users.Where(u => u.IsActive);
+
+        query = pagination.SortBy?.ToLowerInvariant() switch
+        {
+            "username" => pagination.IsDescending
+                ? query.OrderByDescending(u => u.Username)
+                : query.OrderBy(u => u.Username),
+            "email" => pagination.IsDescending
+                ? query.OrderByDescending(u => u.Email)
+                : query.OrderBy(u => u.Email),
+            "role" => pagination.IsDescending
+                ? query.OrderByDescending(u => u.Role)
+                : query.OrderBy(u => u.Role),
+            "createdat" => pagination.IsDescending
+                ? query.OrderByDescending(u => u.CreatedAt)
+                : query.OrderBy(u => u.CreatedAt),
+            _ => query.OrderBy(u => u.Username)
+        };
+
+        var totalCount = await query.CountAsync();
+
+        var users = await query
+            .Skip((pagination.Page - 1) * pagination.PageSize)
+            .Take(pagination.PageSize)
             .Select(u => new UserDto
             {
                 Id = u.Id,
@@ -30,7 +52,13 @@ public class UserService : IUserService
             })
             .ToListAsync();
 
-        return users;
+        return new PagedResponse<UserDto>
+        {
+            Items = users,
+            Page = pagination.Page,
+            PageSize = pagination.PageSize,
+            TotalCount = totalCount
+        };
     }
 
     public async Task<UserDto?> GetUserByIdAsync(int userId)
@@ -172,10 +200,30 @@ public class UserService : IUserService
         return true;
     }
 
-    public async Task<IEnumerable<UserDto>> GetTaggersAsync()
+    public async Task<PagedResponse<UserDto>> GetTaggersAsync(PaginationParams pagination)
     {
-        var taggers = await _context.Users
-            .Where(u => u.Role == UserRoles.Tagger && u.IsActive)
+        IQueryable<User> query = _context.Users
+            .Where(u => u.Role == UserRoles.Tagger && u.IsActive);
+
+        query = pagination.SortBy?.ToLowerInvariant() switch
+        {
+            "username" => pagination.IsDescending
+                ? query.OrderByDescending(u => u.Username)
+                : query.OrderBy(u => u.Username),
+            "email" => pagination.IsDescending
+                ? query.OrderByDescending(u => u.Email)
+                : query.OrderBy(u => u.Email),
+            "createdat" => pagination.IsDescending
+                ? query.OrderByDescending(u => u.CreatedAt)
+                : query.OrderBy(u => u.CreatedAt),
+            _ => query.OrderBy(u => u.Username)
+        };
+
+        var totalCount = await query.CountAsync();
+
+        var taggers = await query
+            .Skip((pagination.Page - 1) * pagination.PageSize)
+            .Take(pagination.PageSize)
             .Select(u => new UserDto
             {
                 Id = u.Id,
@@ -188,6 +236,12 @@ public class UserService : IUserService
             })
             .ToListAsync();
 
-        return taggers;
+        return new PagedResponse<UserDto>
+        {
+            Items = taggers,
+            Page = pagination.Page,
+            PageSize = pagination.PageSize,
+            TotalCount = totalCount
+        };
     }
 }

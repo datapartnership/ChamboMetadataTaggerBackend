@@ -22,7 +22,7 @@ public class TaggerController : ControllerBase
     }
 
     [HttpGet("my-files")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<FileMetadataDto>>>> GetMyAssignedFiles()
+    public async Task<ActionResult<ApiResponse<PagedResponse<FileMetadataDto>>>> GetMyAssignedFiles([FromQuery] PaginationParams pagination)
     {
         try
         {
@@ -30,15 +30,15 @@ public class TaggerController : ControllerBase
 
             if (userIdClaim == null || !int.TryParse(userIdClaim, out int userId))
             {
-                return Unauthorized(ApiResponse<IEnumerable<FileMetadataDto>>.ErrorResponse("Invalid user credentials"));
+                return Unauthorized(ApiResponse<PagedResponse<FileMetadataDto>>.ErrorResponse("Invalid user credentials"));
             }
 
-            var files = await _fileService.GetFilesAssignedToUserAsync(userId);
-            return Ok(ApiResponse<IEnumerable<FileMetadataDto>>.SuccessResponse(files));
+            var files = await _fileService.GetFilesAssignedToUserAsync(userId, pagination);
+            return Ok(ApiResponse<PagedResponse<FileMetadataDto>>.SuccessResponse(files));
         }
         catch (Exception ex)
         {
-            return StatusCode(500, ApiResponse<IEnumerable<FileMetadataDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<PagedResponse<FileMetadataDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
