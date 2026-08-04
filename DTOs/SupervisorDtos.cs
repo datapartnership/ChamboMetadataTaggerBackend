@@ -1,3 +1,5 @@
+using System;
+
 namespace MetadataTagging.DTOs;
 
 public class AssignStudentToSupervisorRequest
@@ -24,8 +26,12 @@ public class StudentWithStatsDto
     public required string Username { get; set; }
     public required string Email { get; set; }
     public int TotalAssigned { get; set; }
-    public int TotalCompleted { get; set; }
     public int InProgress { get; set; }
+    public int SubmittedToSupervisorCount { get; set; }
+    public int SentBackCount { get; set; }
+    public int ApprovedCount { get; set; }
+    [Obsolete("Use ApprovedCount instead.")]
+    public int TotalCompleted { get; set; }
     public List<FileMetadataDto> RecentFiles { get; set; } = new();
 }
 
