@@ -77,8 +77,10 @@ public class SupervisorService : ISupervisorService
                 Username = ss.Student.Username,
                 Email = ss.Student.Email,
                 TotalAssigned = ss.Student.FileAssignments.Count(),
-                TotalCompleted = ss.Student.FileAssignments.Count(fa => fa.IsCompleted),
-                InProgress = ss.Student.FileAssignments.Count(fa => !fa.IsCompleted)
+                InProgress = ss.Student.FileAssignments.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.Assigned),
+                SubmittedToSupervisorCount = ss.Student.FileAssignments.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.SubmittedToSupervisor),
+                SentBackCount = ss.Student.FileAssignments.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.SendBackToTagger),
+                ApprovedCount = ss.Student.FileAssignments.Count(fa => fa.FileMetadata.Status == FileTaggingStatus.ApprovedBySupervisor)
             });
 
         var orderedQuery = pagination.SortBy?.ToLowerInvariant() switch
@@ -92,9 +94,12 @@ public class SupervisorService : ISupervisorService
             "totalassigned" => pagination.IsDescending
                 ? baseQuery.OrderByDescending(s => s.TotalAssigned)
                 : baseQuery.OrderBy(s => s.TotalAssigned),
-            "totalcompleted" => pagination.IsDescending
-                ? baseQuery.OrderByDescending(s => s.TotalCompleted)
-                : baseQuery.OrderBy(s => s.TotalCompleted),
+            "approvedcount" => pagination.IsDescending
+                ? baseQuery.OrderByDescending(s => s.ApprovedCount)
+                : baseQuery.OrderBy(s => s.ApprovedCount),
+            "submittedtosupervisorcount" => pagination.IsDescending
+                ? baseQuery.OrderByDescending(s => s.SubmittedToSupervisorCount)
+                : baseQuery.OrderBy(s => s.SubmittedToSupervisorCount),
             _ => baseQuery.OrderBy(s => s.Username)
         };
 
@@ -147,8 +152,13 @@ public class SupervisorService : ISupervisorService
                 Username = s.Username,
                 Email = s.Email,
                 TotalAssigned = s.TotalAssigned,
-                TotalCompleted = s.TotalCompleted,
                 InProgress = s.InProgress,
+                SubmittedToSupervisorCount = s.SubmittedToSupervisorCount,
+                SentBackCount = s.SentBackCount,
+                ApprovedCount = s.ApprovedCount,
+#pragma warning disable CS0618
+                TotalCompleted = s.ApprovedCount,
+#pragma warning restore CS0618
                 RecentFiles = recentFilesGrouped.GetValueOrDefault(s.StudentId) ?? new List<FileMetadataDto>()
             }),
             Page = pagination.Page,
@@ -358,10 +368,19 @@ public class SupervisorService : ISupervisorService
             return false;
         }
 
+        var file = await _context.FileMetadata.FindAsync(fileId);
+
+        if (file == null)
+        {
+            return false;
+        }
+
         assignment.IsCheckedBySupervisor = true;
         assignment.CheckedBySupervisorId = supervisorId;
         assignment.CheckedAt = DateTime.UtcNow;
         assignment.SupervisorNotes = notes;
+
+        file.Status = FileTaggingStatus.ApprovedBySupervisor;
 
         await _context.SaveChangesAsync();
         return true;
