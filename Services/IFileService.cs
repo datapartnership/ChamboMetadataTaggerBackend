@@ -4,7 +4,7 @@ namespace MetadataTagging.Services;
 
 public interface IFileService
 {
-    Task<PagedResponse<FileMetadataDto>> GetAllFilesAsync(PaginationParams pagination);
+    Task<PagedResponse<FileMetadataDto>> GetAssignedFilesAsync(PaginationParams pagination);
     Task<FileMetadataDto?> GetFileByIdAsync(int fileId, int? userId = null);
     Task<FileMetadataDto?> GetFileByBlobNameAsync(string blobName);
     Task<FileMetadataDto> CreateFileMetadataAsync(CreateFileMetadataRequest request);
