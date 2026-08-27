@@ -16,9 +16,10 @@ public class FileService : IFileService
         _blobService = blobService;
     }
 
-    public async Task<PagedResponse<FileMetadataDto>> GetAllFilesAsync(PaginationParams pagination)
+    public async Task<PagedResponse<FileMetadataDto>> GetAssignedFilesAsync(PaginationParams pagination)
     {
         IQueryable<FileMetadata> query = _context.FileMetadata
+            .Where(f => f.Status != FileTaggingStatus.Unassigned)
             .Include(f => f.FileAssignments)
             .Include(f => f.Tags);
 

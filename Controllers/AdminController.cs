@@ -308,16 +308,16 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("files")]
-    public async Task<ActionResult<ApiResponse<PagedResponse<FileMetadataDto>>>> GetAllFiles([FromQuery] PaginationParams pagination)
+    public async Task<ActionResult<ApiResponse<PagedResponse<FileMetadataDto>>>> GetAssignedFiles([FromQuery] PaginationParams pagination)
     {
         try
         {
-            var files = await _fileService.GetAllFilesAsync(pagination);
+            var files = await _fileService.GetAssignedFilesAsync(pagination);
             return Ok(ApiResponse<PagedResponse<FileMetadataDto>>.SuccessResponse(files));
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error occurred while getting all files");
+            _logger.LogError(ex, "Error occurred while getting assigned files");
             return StatusCode(500, ApiResponse<PagedResponse<FileMetadataDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
