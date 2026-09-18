@@ -1,10 +1,14 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using System.Text;
 using Azure.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.Identity.Web;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using MetadataTagging.Authentication;
 using MetadataTagging.Data;
 using MetadataTagging.Models;
 using MetadataTagging.Services;
@@ -20,6 +24,7 @@ builder.Services.Configure<S3StorageOptions>(builder.Configuration.GetSection("S
 builder.Services.Configure<AzureStorageOptions>(builder.Configuration.GetSection("Storage:AzureStorage"));
 builder.Services.Configure<DatabaseOptions>(builder.Configuration.GetSection(DatabaseOptions.Section));
 builder.Services.Configure<MetadataTagger.Options.CorsOptions>(builder.Configuration.GetSection(MetadataTagger.Options.CorsOptions.Section));
+builder.Services.Configure<EntraIdOptions>(builder.Configuration.GetSection(EntraIdOptions.Section));
 builder.Services.Configure<DefaultAdminSettings>(builder.Configuration.GetSection(DefaultAdminSettings.Section));
 builder.Services.Configure<DefaultTaggerSettings>(builder.Configuration.GetSection(DefaultTaggerSettings.Section));
 builder.Services.Configure<DefaultSupervisorSettings>(builder.Configuration.GetSection(DefaultSupervisorSettings.Section));
@@ -64,6 +69,7 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<IEntraUserProvisioningService, EntraUserProvisioningService>();
 builder.Services.AddScoped<IFileService, FileService>();
 
 var storageOptions = builder.Configuration.GetSection(StorageOptions.Section).Get<StorageOptions>()
@@ -82,12 +88,21 @@ if (jwtOptions == null || string.IsNullOrEmpty(jwtOptions.SecretKey))
 }
 var secretKey = jwtOptions.SecretKey;
 
-builder.Services.AddAuthentication(options =>
+var entraIdOptions = builder.Configuration.GetSection(EntraIdOptions.Section).Get<EntraIdOptions>()
+    ?? new EntraIdOptions();
+
+const string LocalAuthScheme = "Local";
+const string EntraIdAuthScheme = "EntraId";
+const string SmartAuthScheme = "Smart";
+
+var authenticationBuilder = builder.Services.AddAuthentication(options =>
 {
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    // When Entra ID isn't configured, behave exactly as before: the local JWT
+    // scheme is the only (and default) one.
+    options.DefaultAuthenticateScheme = entraIdOptions.IsConfigured ? SmartAuthScheme : LocalAuthScheme;
+    options.DefaultChallengeScheme = entraIdOptions.IsConfigured ? SmartAuthScheme : LocalAuthScheme;
 })
-.AddJwtBearer(options =>
+.AddJwtBearer(LocalAuthScheme, options =>
 {
     options.TokenValidationParameters = new TokenValidationParameters
     {
@@ -100,6 +115,64 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
     };
 });
+
+if (entraIdOptions.IsConfigured)
+{
+    authenticationBuilder.AddMicrosoftIdentityWebApi(
+        builder.Configuration,
+        configSectionName: EntraIdOptions.Section,
+        jwtBearerScheme: EntraIdAuthScheme);
+
+    // Map Entra App Roles onto ClaimTypes.Role and JIT-provision/sync the local
+    // user record so downstream controllers see the same claim shape as local logins.
+    builder.Services.Configure<JwtBearerOptions>(EntraIdAuthScheme, options =>
+    {
+        options.TokenValidationParameters.RoleClaimType = entraIdOptions.RoleClaimType;
+
+        options.Events ??= new JwtBearerEvents();
+        var previousOnTokenValidated = options.Events.OnTokenValidated;
+        options.Events.OnTokenValidated = async context =>
+        {
+            if (previousOnTokenValidated != null)
+            {
+                await previousOnTokenValidated(context);
+            }
+
+            await EntraTokenClaimsNormalizer.NormalizeAsync(context, entraIdOptions.RoleClaimType);
+        };
+    });
+
+    // Routes each incoming request to the "Local" or "EntraId" scheme based on the
+    // bearer token's issuer, so existing [Authorize(Roles = ...)] attributes (which
+    // don't specify a scheme) keep working unchanged for both token types.
+    authenticationBuilder.AddPolicyScheme(SmartAuthScheme, "Local or Entra ID", options =>
+    {
+        options.ForwardDefaultSelector = context =>
+        {
+            var authorizationHeader = context.Request.Headers.Authorization.ToString();
+            if (authorizationHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                var token = authorizationHeader["Bearer ".Length..].Trim();
+                try
+                {
+                    var issuer = new JwtSecurityTokenHandler().ReadJwtToken(token).Issuer;
+                    if (issuer.Contains("login.microsoftonline.com", StringComparison.OrdinalIgnoreCase) ||
+                        issuer.Contains("sts.windows.net", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return EntraIdAuthScheme;
+                    }
+                }
+                catch (Exception)
+                {
+                    // Not a well-formed JWT — fall through to the local scheme, which
+                    // will reject it during normal validation.
+                }
+            }
+
+            return LocalAuthScheme;
+        };
+    });
+}
 
 builder.Services.AddAuthorization();
 
@@ -166,6 +239,12 @@ using (var scope = app.Services.CreateScope())
     var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     //dbContext.Database.EnsureDeleted();
     dbContext.Database.EnsureCreated();
+
+    // EnsureCreated() only creates the schema for a brand-new database; it does not
+    // alter tables that already exist. Since this project has no EF Core migrations,
+    // patch pre-existing "Users" tables (e.g. an already-provisioned dev/prod database)
+    // so they pick up the columns added for Entra ID support.
+    await EnsureUserAuthColumnsAsync(dbContext, dbOptions.Provider);
 
     // Create default Admin user
     var adminSettings = scope.ServiceProvider.GetRequiredService<IOptions<DefaultAdminSettings>>().Value;
@@ -264,3 +343,39 @@ app.MapControllers();
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
 app.Run();
+
+// Adds any "Users" table columns introduced for Entra ID support that are missing on an
+// already-existing database (EnsureCreated() does not retrofit schema changes). Safe to run
+// on every startup: each statement is a no-op once the column/constraint change is applied.
+static async Task EnsureUserAuthColumnsAsync(ApplicationDbContext dbContext, string provider)
+{
+    if (provider.Equals("postgresql", StringComparison.OrdinalIgnoreCase))
+    {
+        await dbContext.Database.ExecuteSqlRawAsync(
+            "ALTER TABLE \"Users\" ADD COLUMN IF NOT EXISTS \"AuthProvider\" text NOT NULL DEFAULT 'Local'");
+        await dbContext.Database.ExecuteSqlRawAsync(
+            "ALTER TABLE \"Users\" ALTER COLUMN \"PasswordHash\" DROP NOT NULL");
+        return;
+    }
+
+    // SQLite has no "ADD COLUMN IF NOT EXISTS", so check pragma_table_info first. Relaxing an
+    // existing NOT NULL constraint on SQLite requires a full table rebuild, which is not done
+    // here — local SQLite databases are disposable dev stores, so delete the database file to
+    // pick up the relaxed PasswordHash constraint via a fresh EnsureCreated().
+    var connection = dbContext.Database.GetDbConnection();
+    if (connection.State != System.Data.ConnectionState.Open)
+    {
+        await connection.OpenAsync();
+    }
+
+    await using var command = connection.CreateCommand();
+    command.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Users') WHERE name = 'AuthProvider'";
+    var hasAuthProviderColumn = Convert.ToInt64(await command.ExecuteScalarAsync()) > 0;
+
+    if (!hasAuthProviderColumn)
+    {
+        await dbContext.Database.ExecuteSqlRawAsync(
+            "ALTER TABLE \"Users\" ADD COLUMN \"AuthProvider\" TEXT NOT NULL DEFAULT 'Local'");
+    }
+}
+

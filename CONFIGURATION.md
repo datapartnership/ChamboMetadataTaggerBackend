@@ -36,6 +36,23 @@ public class DefaultAdminSettings
 }
 ```
 
+### 4. EntraIdOptions
+
+Optional configuration (`Options/EntraIdOptions.cs`) for accepting Azure Entra ID
+(Azure AD) access tokens **alongside** the local email/password JWT login. Entra ID
+authentication is only enabled when both `TenantId` and `ClientId` are set.
+
+```csharp
+public class EntraIdOptions
+{
+    public string Instance { get; set; } = "https://login.microsoftonline.com/";
+    public string TenantId { get; set; } = string.Empty;
+    public string ClientId { get; set; } = string.Empty;
+    public string Audience { get; set; } = string.Empty;
+    public string RoleClaimType { get; set; } = "roles";
+}
+```
+
 ## Registration in Program.cs
 
 Configuration options are registered in `Program.cs`:
@@ -100,6 +117,13 @@ public class AzureBlobService : IAzureBlobService
     "Audience": "MetadataTaggingClient",
     "ExpiryMinutes": 480
   },
+  "EntraId": {
+    "Instance": "https://login.microsoftonline.com/",
+    "TenantId": "",
+    "ClientId": "",
+    "Audience": "",
+    "RoleClaimType": "roles"
+  },
   "AzureBlobStorage": {
     "ConnectionString": "your-azure-storage-connection-string",
     "ContainerName": "files"
@@ -111,6 +135,46 @@ public class AzureBlobService : IAzureBlobService
   }
 }
 ```
+
+## Azure Entra ID (Azure AD) Authentication (optional)
+
+The API can accept **Entra ID-issued access tokens** directly as `Authorization: Bearer <token>`,
+in addition to the local email/password JWT login. This is disabled by default and
+only activates once `EntraId:TenantId` and `EntraId:ClientId` (or the equivalent
+`EntraId__TenantId` / `EntraId__ClientId` environment variables) are set.
+
+### How it works
+
+1. Both a local JWT scheme (`Local`) and an Entra ID scheme (`EntraId`) are
+   registered. A policy scheme inspects each incoming bearer token's issuer and
+   routes it to the right scheme, so existing `[Authorize(Roles = ...)]`
+   attributes on controllers require no changes.
+2. Entra ID tokens must carry a `roles` claim (Entra **App Roles**) with one of
+   `Admin`, `Supervisor`, or `Tagger` — tokens without a recognized role are rejected.
+3. On first successful Entra ID login, a local `Users` row is automatically
+   created (and kept in sync on subsequent logins) from the token's
+   email/name/role claims, so existing per-user data (file assignments, audit
+   fields, etc.) keeps working against the same integer `Users.Id`.
+
+### Entra app registration setup
+
+1. In the Azure Portal, register an application (or reuse an existing one) for this API.
+2. Under **Expose an API**, add an Application ID URI (e.g. `api://<client-id>`) and
+   at least one scope if the calling client needs one.
+3. Under **App roles**, create three app roles with **Value** set exactly to
+   `Admin`, `Supervisor`, and `Tagger` (allowed member types: Users/Groups or Applications, as needed).
+4. In **Enterprise applications** → your app → **Users and groups**, assign each
+   user to the appropriate app role.
+5. Set the following configuration (via `appsettings.json` or environment variables):
+
+| Setting | Description | Required |
+|---|---|---|
+| `EntraId__TenantId` | Azure Entra ID tenant ID (GUID) | **Yes** (to enable Entra ID auth) |
+| `EntraId__ClientId` | Application (client) ID of the app registration | **Yes** (to enable Entra ID auth) |
+| `EntraId__Instance` | Azure AD instance | No (default: `https://login.microsoftonline.com/`) |
+| `EntraId__Audience` | Expected token audience, if different from `ClientId` | No |
+| `EntraId__RoleClaimType` | Claim type carrying the App Roles | No (default: `roles`) |
+
 
 ## Benefits of the Options Pattern
 
