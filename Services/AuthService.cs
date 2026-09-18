@@ -26,7 +26,9 @@ public class AuthService : IAuthService
         var user = await _context.Users
             .FirstOrDefaultAsync(u => u.Email == email && u.IsActive);
 
-        if (user == null || !BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
+        // Entra-only accounts have no local password hash and cannot use this flow.
+        if (user == null || string.IsNullOrEmpty(user.PasswordHash)
+            || !BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
         {
             return null;
         }
