@@ -4,7 +4,9 @@ bin/
 obj/
 *.db
 *.db*
-*.sln
 .vscode/
 copyFEandBuildImage.sh
 backend.http
+*.http
+*.csv
+.DS_Store

@@ -46,17 +46,17 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("users")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<UserDto>>>> GetAllUsers()
+    public async Task<ActionResult<ApiResponse<PagedResponse<UserDto>>>> GetAllUsers([FromQuery] PaginationParams pagination)
     {
         try
         {
-            var users = await _userService.GetAllUsersAsync();
-            return Ok(ApiResponse<IEnumerable<UserDto>>.SuccessResponse(users));
+            var users = await _userService.GetAllUsersAsync(pagination);
+            return Ok(ApiResponse<PagedResponse<UserDto>>.SuccessResponse(users));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error occurred while getting all users");
-            return StatusCode(500, ApiResponse<IEnumerable<UserDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<PagedResponse<UserDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
@@ -184,32 +184,65 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("taggers")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<UserDto>>>> GetTaggers()
+    public async Task<ActionResult<ApiResponse<PagedResponse<UserDto>>>> GetTaggers([FromQuery] PaginationParams pagination)
     {
         try
         {
-            var taggers = await _userService.GetTaggersAsync();
-            return Ok(ApiResponse<IEnumerable<UserDto>>.SuccessResponse(taggers));
+            var taggers = await _userService.GetTaggersAsync(pagination);
+            return Ok(ApiResponse<PagedResponse<UserDto>>.SuccessResponse(taggers));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error occurred while getting taggers");
-            return StatusCode(500, ApiResponse<IEnumerable<UserDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<PagedResponse<UserDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
     [HttpGet("blobs")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<BlobFileDto>>>> GetAllBlobs([FromQuery] string? folder = null)
+    public async Task<ActionResult<ApiResponse<PagedResponse<BlobFileDto>>>> GetAllBlobs(
+        [FromQuery] string? folder = null,
+        [FromQuery] PaginationParams? pagination = null)
     {
+        pagination ??= new PaginationParams();
         try
         {
-            var blobs = await _blobService.ListBlobsAsync(prefix: folder);
-            return Ok(ApiResponse<IEnumerable<BlobFileDto>>.SuccessResponse(blobs));
+            var allBlobs = (await _blobService.ListBlobsAsync(prefix: folder)).ToList();
+
+            IEnumerable<BlobFileDto> sorted = pagination.SortBy?.ToLowerInvariant() switch
+            {
+                "blobname" => pagination.IsDescending
+                    ? allBlobs.OrderByDescending(b => b.BlobName)
+                    : allBlobs.OrderBy(b => b.BlobName),
+                "filesize" => pagination.IsDescending
+                    ? allBlobs.OrderByDescending(b => b.FileSize)
+                    : allBlobs.OrderBy(b => b.FileSize),
+                "lastmodified" => pagination.IsDescending
+                    ? allBlobs.OrderByDescending(b => b.LastModified)
+                    : allBlobs.OrderBy(b => b.LastModified),
+                "contenttype" => pagination.IsDescending
+                    ? allBlobs.OrderByDescending(b => b.ContentType)
+                    : allBlobs.OrderBy(b => b.ContentType),
+                "filecategory" => pagination.IsDescending
+                    ? allBlobs.OrderByDescending(b => b.FileCategory)
+                    : allBlobs.OrderBy(b => b.FileCategory),
+                _ => allBlobs.OrderBy(b => b.BlobName)
+            };
+
+            var sortedList = sorted.ToList();
+            var pagedResult = new PagedResponse<BlobFileDto>
+            {
+                Items = sortedList.Skip((pagination.Page - 1) * pagination.PageSize).Take(pagination.PageSize),
+                Page = pagination.Page,
+                PageSize = pagination.PageSize,
+                TotalCount = sortedList.Count
+            };
+
+            return Ok(ApiResponse<PagedResponse<BlobFileDto>>.SuccessResponse(pagedResult));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error occurred while getting all blobs");
-            return StatusCode(500, ApiResponse<IEnumerable<BlobFileDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<PagedResponse<BlobFileDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
@@ -283,32 +316,32 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("files")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<FileMetadataDto>>>> GetAllFiles()
+    public async Task<ActionResult<ApiResponse<PagedResponse<FileMetadataDto>>>> GetAssignedFiles([FromQuery] PaginationParams pagination)
     {
         try
         {
-            var files = await _fileService.GetAllFilesAsync();
-            return Ok(ApiResponse<IEnumerable<FileMetadataDto>>.SuccessResponse(files));
+            var files = await _fileService.GetAssignedFilesAsync(pagination);
+            return Ok(ApiResponse<PagedResponse<FileMetadataDto>>.SuccessResponse(files));
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error occurred while getting all files");
-            return StatusCode(500, ApiResponse<IEnumerable<FileMetadataDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            _logger.LogError(ex, "Error occurred while getting assigned files");
+            return StatusCode(500, ApiResponse<PagedResponse<FileMetadataDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
     [HttpGet("files/unassigned")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<FileMetadataDto>>>> GetUnassignedFiles()
+    public async Task<ActionResult<ApiResponse<PagedResponse<FileMetadataDto>>>> GetUnassignedFiles([FromQuery] PaginationParams pagination)
     {
         try
         {
-            var files = await _fileService.GetUnassignedFilesAsync();
-            return Ok(ApiResponse<IEnumerable<FileMetadataDto>>.SuccessResponse(files));
+            var files = await _fileService.GetUnassignedFilesAsync(pagination);
+            return Ok(ApiResponse<PagedResponse<FileMetadataDto>>.SuccessResponse(files));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error occurred while getting unassigned files");
-            return StatusCode(500, ApiResponse<IEnumerable<FileMetadataDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<PagedResponse<FileMetadataDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
@@ -541,17 +574,17 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("tagging-progress")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<TaggingProgressDto>>>> GetTaggingProgress()
+    public async Task<ActionResult<ApiResponse<PagedResponse<TaggingProgressDto>>>> GetTaggingProgress([FromQuery] PaginationParams pagination)
     {
         try
         {
-            var progress = await _fileService.GetTaggingProgressAsync();
-            return Ok(ApiResponse<IEnumerable<TaggingProgressDto>>.SuccessResponse(progress));
+            var progress = await _fileService.GetTaggingProgressAsync(pagination);
+            return Ok(ApiResponse<PagedResponse<TaggingProgressDto>>.SuccessResponse(progress));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error occurred while getting tagging progress");
-            return StatusCode(500, ApiResponse<IEnumerable<TaggingProgressDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<PagedResponse<TaggingProgressDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
@@ -602,17 +635,38 @@ public class AdminController : ControllerBase
     }
 
     [HttpGet("supervisor-assignments")]
-    public async Task<ActionResult<ApiResponse<IEnumerable<StudentSupervisorDto>>>> GetSupervisorAssignments()
+    public async Task<ActionResult<ApiResponse<PagedResponse<StudentSupervisorDto>>>> GetSupervisorAssignments([FromQuery] PaginationParams pagination)
     {
         try
         {
-            var assignments = await _supervisorService.GetAllSupervisorAssignmentsAsync();
-            return Ok(ApiResponse<IEnumerable<StudentSupervisorDto>>.SuccessResponse(assignments));
+            var assignments = await _supervisorService.GetAllSupervisorAssignmentsAsync(pagination);
+            return Ok(ApiResponse<PagedResponse<StudentSupervisorDto>>.SuccessResponse(assignments));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error occurred while getting supervisor assignments");
-            return StatusCode(500, ApiResponse<IEnumerable<StudentSupervisorDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<PagedResponse<StudentSupervisorDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+        }
+    }
+
+    [HttpPost("clear-assignments")]
+    public async Task<ActionResult<ApiResponse<bool>>> ClearAssignments()
+    {
+        try
+        {
+            _logger.LogWarning("Clear assignments initiated by admin");
+
+            await _dbContext.FileTags.ExecuteDeleteAsync();
+            await _dbContext.FileAssignments.ExecuteDeleteAsync();
+            await _dbContext.StudentSupervisors.ExecuteDeleteAsync();
+
+            _logger.LogWarning("Clear assignments completed successfully");
+            return Ok(ApiResponse<bool>.SuccessResponse(true, "All file assignments, taggings, and tagger-supervisor assignments have been cleared."));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error occurred while clearing assignments");
+            return StatusCode(500, ApiResponse<bool>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
@@ -634,6 +688,59 @@ public class AdminController : ControllerBase
             _logger.LogError(ex, "Error occurred while resetting the database");
             return StatusCode(500, ApiResponse<bool>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
+    }
+
+    [HttpGet("export/annotations")]
+    public async Task<IActionResult> ExportAnnotationsCsv()
+    {
+        try
+        {
+            var files = await _dbContext.FileMetadata
+                .Include(f => f.Tags)
+                .Where(f => f.Status == FileTaggingStatus.SubmittedToSupervisor ||
+                            f.Status == FileTaggingStatus.ApprovedBySupervisor)
+                .OrderBy(f => f.Id)
+                .AsNoTracking()
+                .ToListAsync();
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("FileId,FilePath,Status,Keywords,Themes");
+
+            foreach (var file in files)
+            {
+                var keywords = file.Tags
+                    .Where(t => t.TagKey.Equals("Keywords", StringComparison.OrdinalIgnoreCase))
+                    .Select(t => t.TagValue);
+
+                var themes = file.Tags
+                    .Where(t => t.TagKey.Equals("Theme", StringComparison.OrdinalIgnoreCase))
+                    .Select(t => t.TagValue);
+
+                sb.AppendLine(string.Join(",", new[]
+                {
+                    file.Id.ToString(),
+                    CsvEscape(file.BlobName ?? file.FileName),
+                    file.Status.ToString(),
+                    CsvEscape(string.Join("|", keywords)),
+                    CsvEscape(string.Join("|", themes))
+                }));
+            }
+
+            var bytes = System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+            return File(bytes, "text/csv", $"annotations_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error occurred while exporting annotations CSV");
+            return StatusCode(500, ApiResponse<object>.ErrorResponse($"An error occurred: {ex.Message}"));
+        }
+    }
+
+    private static string CsvEscape(string value)
+    {
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+            return $"\"{value.Replace("\"", "\"\"")}\"";
+        return value;
     }
 
     private async Task<IActionResult> HandleRangeRequest(string blobName, string contentType, string rangeHeader)
