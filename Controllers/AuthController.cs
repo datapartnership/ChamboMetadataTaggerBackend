@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+using System.Security.Claims;
 using MetadataTagging.DTOs;
 using MetadataTagging.Services;
 
@@ -55,5 +57,32 @@ public class AuthController : ControllerBase
         {
             return StatusCode(500, ApiResponse<LoginResponse>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
+    }
+
+    [Authorize]
+    [HttpGet("me")]
+    public async Task<ActionResult<ApiResponse<UserDto>>> Me()
+    {
+        var userIdValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!int.TryParse(userIdValue, out var userId))
+        {
+            return Unauthorized(ApiResponse<UserDto>.ErrorResponse("Authenticated user identifier is invalid"));
+        }
+
+        var user = await _authService.GetUserByIdAsync(userId);
+        if (user == null || !user.IsActive)
+        {
+            return Unauthorized(ApiResponse<UserDto>.ErrorResponse("User is not authorized for this application"));
+        }
+
+        return Ok(ApiResponse<UserDto>.SuccessResponse(new UserDto
+        {
+            Id = user.Id,
+            Username = user.Username,
+            Email = user.Email,
+            Role = user.Role,
+            CreatedAt = user.CreatedAt,
+            IsActive = user.IsActive
+        }));
     }
 }
