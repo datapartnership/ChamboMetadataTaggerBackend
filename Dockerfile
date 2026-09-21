@@ -1,4 +1,3 @@
-# ---------- Build stage ----------
 FROM artifactory.worldbank.org/itsdo-dec-lrll-docker-virtual/dotnet/sdk:8.0-jammy AS build
 WORKDIR /src
 COPY . .
