@@ -175,6 +175,10 @@ only activates once `EntraId:TenantId` and `EntraId:ClientId` (or the equivalent
 | `EntraId__Audience` | Expected token audience, if different from `ClientId` | No |
 | `EntraId__RoleClaimType` | Claim type carrying the App Roles | No (default: `roles`) |
 
+The frontend sends its Entra access token to `GET /api/Auth/me` after the configured
+`/callback` route completes. This validates the token and returns the provisioned local
+application user for the role-specific frontend dashboard.
+
 
 ## Benefits of the Options Pattern
 
