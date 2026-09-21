@@ -12,8 +12,6 @@ namespace MetadataTagging.Services;
 public class AzureBlobService : IStorageService
 {
     private readonly BlobContainerClient _containerClient;
-    private readonly BlobServiceClient? _blobServiceClient;
-    private readonly string _accountName = string.Empty;
 
     public AzureBlobService(IOptions<AzureStorageOptions> blobSettings)
     {
@@ -23,27 +21,13 @@ public class AzureBlobService : IStorageService
         if (settings.UseManagedIdentity)
         {
             var serviceUri = new Uri($"https://{settings.AccountName}.blob.core.windows.net");
-            var credentialOptions = new DefaultAzureCredentialOptions();
-            if (!string.IsNullOrEmpty(settings.ManagedIdentityClientId))
-                credentialOptions.ManagedIdentityClientId = settings.ManagedIdentityClientId;
-            blobServiceClient = new BlobServiceClient(serviceUri, new DefaultAzureCredential(credentialOptions));
-            _blobServiceClient = blobServiceClient;
-            _accountName = settings.AccountName;
+            blobServiceClient = new BlobServiceClient(serviceUri, new DefaultAzureCredential());
         }
         else
         {
             blobServiceClient = new BlobServiceClient(settings.ConnectionString);
         }
         _containerClient = blobServiceClient.GetBlobContainerClient(settings.ContainerName);
-        try
-        {
-            _containerClient.CreateIfNotExists();
-        }
-        catch (Exception ex)
-        {
-            // Container may already exist or credentials unavailable at startup — log and continue
-            Console.Error.WriteLine($"[AzureBlobService] Could not ensure blob container exists: {ex.Message}");
-        }
     }
 
     public async Task<IEnumerable<BlobFileDto>> ListBlobsAsync(string? prefix = null)
@@ -97,6 +81,11 @@ public class AzureBlobService : IStorageService
             throw new FileNotFoundException($"Blob '{blobName}' not found");
         }
 
+        if (!blobClient.CanGenerateSasUri)
+        {
+            return blobClient.Uri.ToString();
+        }
+
         var sasBuilder = new BlobSasBuilder
         {
             BlobContainerName = _containerClient.Name,
@@ -108,23 +97,8 @@ public class AzureBlobService : IStorageService
 
         sasBuilder.SetPermissions(BlobSasPermissions.Read);
 
-        if (blobClient.CanGenerateSasUri)
-        {
-            var sasUri = blobClient.GenerateSasUri(sasBuilder);
-            return sasUri.ToString();
-        }
-
-        // Managed Identity path: use User Delegation SAS
-        if (_blobServiceClient == null)
-            return blobClient.Uri.ToString();
-
-        var delegationKey = await _blobServiceClient.GetUserDelegationKeyAsync(
-            sasBuilder.StartsOn,
-            sasBuilder.ExpiresOn);
-
-        var sasParams = sasBuilder.ToSasQueryParameters(delegationKey, _accountName);
-        var uriBuilder = new BlobUriBuilder(blobClient.Uri) { Sas = sasParams };
-        return uriBuilder.ToUri().ToString();
+        var sasUri = blobClient.GenerateSasUri(sasBuilder);
+        return sasUri.ToString();
     }
 
     public async Task<bool> BlobExistsAsync(string blobName)
