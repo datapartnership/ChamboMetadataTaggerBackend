@@ -25,11 +25,8 @@ public class ApplicationDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.Username).IsUnique();
             entity.HasIndex(e => e.Email).IsUnique();
-            entity.HasIndex(e => e.AzureObjectId).IsUnique()
-                  .HasFilter("\"AzureObjectId\" IS NOT NULL");
             entity.Property(e => e.Username).HasMaxLength(100);
             entity.Property(e => e.Email).HasMaxLength(255);
-            entity.Property(e => e.AzureObjectId).HasMaxLength(36);
             entity.Property(e => e.Role).HasMaxLength(50);
         });
 
