@@ -22,17 +22,21 @@ public class EntraUserProvisioningService : IEntraUserProvisioningService
         _context = context;
     }
 
-    public async Task<User?> ProvisionOrSyncUserAsync(string email, string? displayName, IEnumerable<string> entraRoles)
+    public async Task<User?> ProvisionOrSyncUserAsync(
+        string email,
+        string? displayName,
+        IEnumerable<string> roles,
+        string authProvider = UserAuthProviders.Entra)
     {
         if (string.IsNullOrWhiteSpace(email))
         {
             return null;
         }
 
-        var role = RolePrecedence.FirstOrDefault(r => entraRoles.Contains(r, StringComparer.OrdinalIgnoreCase));
+        var role = RolePrecedence.FirstOrDefault(r => roles.Contains(r, StringComparer.OrdinalIgnoreCase));
         if (role == null)
         {
-            // No recognized Admin/Supervisor/Tagger app role assigned in Entra ID.
+            // No recognized Admin/Supervisor/Tagger role assigned by the identity provider.
             return null;
         }
 
@@ -53,7 +57,7 @@ public class EntraUserProvisioningService : IEntraUserProvisioningService
             }
 
             user.Role = role;
-            user.AuthProvider = UserAuthProviders.Entra;
+            user.AuthProvider = authProvider;
             user.LastLoginAt = DateTime.UtcNow;
         }
         else
@@ -64,7 +68,7 @@ public class EntraUserProvisioningService : IEntraUserProvisioningService
                 Email = normalizedEmail,
                 PasswordHash = null,
                 Role = role,
-                AuthProvider = UserAuthProviders.Entra,
+                AuthProvider = authProvider,
                 IsActive = true,
                 LastLoginAt = DateTime.UtcNow
             };

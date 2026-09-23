@@ -36,7 +36,8 @@ public class AzureBlobService : IStorageService
 
         try
         {
-            await foreach (BlobItem blobItem in _containerClient.GetBlobsAsync(prefix: prefix))
+            await foreach (BlobItem blobItem in _containerClient.GetBlobsAsync(
+                traits: BlobTraits.None, states: BlobStates.None, prefix: prefix, cancellationToken: default))
             {
                 var blobClient = _containerClient.GetBlobClient(blobItem.Name);
 
