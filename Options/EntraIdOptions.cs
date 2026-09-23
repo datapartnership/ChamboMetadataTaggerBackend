@@ -21,6 +21,23 @@ public class EntraIdOptions
     /// </summary>
     public string RoleClaimType { get; set; } = "roles";
 
+    /// <summary>
+    /// Claim type that carries Entra group object IDs.
+    /// </summary>
+    public string GroupClaimType { get; set; } = "groups";
+
+    /// <summary>
+    /// Maps Entra group object IDs to application roles when app roles are not
+    /// emitted directly in the access token.
+    /// </summary>
+    public List<EntraGroupRoleMapping> GroupRoleMappings { get; set; } = [];
+
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(TenantId) && !string.IsNullOrWhiteSpace(ClientId);
+}
+
+public class EntraGroupRoleMapping
+{
+    public string GroupId { get; set; } = string.Empty;
+    public string Role { get; set; } = string.Empty;
 }

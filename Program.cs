@@ -95,6 +95,30 @@ const string LocalAuthScheme = "Local";
 const string EntraIdAuthScheme = "EntraId";
 const string SmartAuthScheme = "Smart";
 
+var recognizedRoles = new HashSet<string>(
+    [UserRoles.Admin, UserRoles.Supervisor, UserRoles.Tagger],
+    StringComparer.OrdinalIgnoreCase);
+var invalidGroupRoleMapping = entraIdOptions.GroupRoleMappings.FirstOrDefault(mapping =>
+    !Guid.TryParse(mapping.GroupId, out _) || !recognizedRoles.Contains(mapping.Role));
+if (invalidGroupRoleMapping != null)
+{
+    throw new InvalidOperationException(
+        "Each EntraId:GroupRoleMappings entry must contain a valid group object ID and a role of Admin, Supervisor, or Tagger.");
+}
+
+var conflictingGroupRoleMapping = entraIdOptions.GroupRoleMappings
+    .GroupBy(mapping => mapping.GroupId, StringComparer.OrdinalIgnoreCase)
+    .FirstOrDefault(group => group
+        .Select(mapping => mapping.Role)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Skip(1)
+        .Any());
+if (conflictingGroupRoleMapping != null)
+{
+    throw new InvalidOperationException(
+        $"Entra group '{conflictingGroupRoleMapping.Key}' is mapped to more than one application role.");
+}
+
 var authenticationBuilder = builder.Services.AddAuthentication(options =>
 {
     // When Entra ID isn't configured, behave exactly as before: the local JWT
@@ -138,7 +162,7 @@ if (entraIdOptions.IsConfigured)
                 await previousOnTokenValidated(context);
             }
 
-            await EntraTokenClaimsNormalizer.NormalizeAsync(context, entraIdOptions.RoleClaimType);
+            await EntraTokenClaimsNormalizer.NormalizeAsync(context, entraIdOptions);
         };
     });
 
@@ -378,4 +402,3 @@ static async Task EnsureUserAuthColumnsAsync(ApplicationDbContext dbContext, str
             "ALTER TABLE \"Users\" ADD COLUMN \"AuthProvider\" TEXT NOT NULL DEFAULT 'Local'");
     }
 }
-
