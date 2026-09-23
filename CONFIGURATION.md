@@ -149,8 +149,9 @@ only activates once `EntraId:TenantId` and `EntraId:ClientId` (or the equivalent
    registered. A policy scheme inspects each incoming bearer token's issuer and
    routes it to the right scheme, so existing `[Authorize(Roles = ...)]`
    attributes on controllers require no changes.
-2. Entra ID tokens must carry a `roles` claim (Entra **App Roles**) with one of
-   `Admin`, `Supervisor`, or `Tagger` — tokens without a recognized role are rejected.
+2. Authorization accepts either a `roles` claim (Entra **App Roles**) with one of
+   `Admin`, `Supervisor`, or `Tagger`, or a `groups` claim containing an object ID
+   configured in `EntraId:GroupRoleMappings`.
 3. On first successful Entra ID login, a local `Users` row is automatically
    created (and kept in sync on subsequent logins) from the token's
    email/name/role claims, so existing per-user data (file assignments, audit
@@ -174,6 +175,28 @@ only activates once `EntraId:TenantId` and `EntraId:ClientId` (or the equivalent
 | `EntraId__Instance` | Azure AD instance | No (default: `https://login.microsoftonline.com/`) |
 | `EntraId__Audience` | Expected token audience, if different from `ClientId` | No |
 | `EntraId__RoleClaimType` | Claim type carrying the App Roles | No (default: `roles`) |
+| `EntraId__GroupClaimType` | Claim type carrying Entra group object IDs | No (default: `groups`) |
+| `EntraId__GroupRoleMappings` | Array mapping group object IDs to `Admin`, `Supervisor`, or `Tagger` | No |
+
+Example group mappings:
+
+```json
+{
+  "EntraId": {
+    "GroupClaimType": "groups",
+    "GroupRoleMappings": [
+      { "GroupId": "<admin-group-object-id>", "Role": "Admin" },
+      { "GroupId": "<supervisor-group-object-id>", "Role": "Supervisor" },
+      { "GroupId": "<tagger-group-object-id>", "Role": "Tagger" }
+    ]
+  }
+}
+```
+
+Multiple group IDs may map to the same role. If a user belongs to groups mapped
+to different roles, the existing precedence is `Admin`, then `Supervisor`, then
+`Tagger`. Tokens using Entra group overage claims instead of an inline `groups`
+claim require Microsoft Graph resolution and are not supported by this mapping.
 
 The frontend sends its Entra access token to `GET /api/Auth/me` after the configured
 `/callback` route completes. This validates the token and returns the provisioned local
