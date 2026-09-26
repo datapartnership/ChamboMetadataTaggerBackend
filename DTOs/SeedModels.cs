@@ -1,69 +1,36 @@
 namespace MetadataTagging.DTOs;
 
-/// <summary>Controls how the seed endpoint populates the database.</summary>
-public enum SeedMode
+/// <summary>Row changes applied by a seed run, for one media type or in total.</summary>
+public class SeedCounts
 {
-    /// <summary>Scan the configured file storage and ingest real file metadata.</summary>
-    Scan = 0,
-    /// <summary>Generate synthetic records without touching the file storage.</summary>
-    Dummy = 1,
+    public int CollectionsAdded { get; set; }
+    public int CollectionsUpdated { get; set; }
+    public int CollectionsDeleted { get; set; }
+    public int FilesAdded { get; set; }
+    public int FilesUpdated { get; set; }
+    public int FilesDeleted { get; set; }
 }
 
-/// <summary>Request body for <c>POST /api/seed</c>.</summary>
-public class SeedRequest
-{
-    /// <summary>
-    /// Whether to scan real storage or generate dummy records.
-    /// Default: <c>Scan</c>.
-    /// </summary>
-    /// <example>Scan</example>
-    public SeedMode Mode { get; set; } = SeedMode.Scan;
-
-    /// <summary>
-    /// Comma-separated media-house names used in dummy mode only.
-    /// Defaults to <c>MediaHouseA,MediaHouseB,MediaHouseC,MediaHouseD</c>.
-    /// </summary>
-    /// <example>MediaHouseA,MediaHouseB</example>
-    public string? DummyHouses { get; set; }
-
-    /// <summary>Number of synthetic file records per media house (dummy mode only). Default: 40.</summary>
-    /// <example>40</example>
-    public int DummyFilesPerHouse { get; set; } = 40;
-}
-
-/// <summary>Summary returned after a successful seed operation.</summary>
+/// <summary>Summary returned by <c>POST /api/seed</c>.</summary>
 public class SeedResult
 {
-    /// <summary>Number of new Dataset rows created.</summary>
-    public int DatasetsCreated { get; set; }
+    /// <summary>Changes per media type, keyed by <c>Text</c>, <c>Audio</c>, and <c>Video</c>.</summary>
+    public Dictionary<string, SeedCounts> ByMediaType { get; set; } = [];
 
-    /// <summary>Number of new FileRecord rows inserted.</summary>
-    public int FilesInserted { get; set; }
+    /// <summary>Changes across all media types.</summary>
+    public SeedCounts Totals { get; set; } = new();
 
-    /// <summary>Files already present in the database that were skipped (scan mode only).</summary>
-    public int FilesSkipped { get; set; }
-
-    /// <summary>Number of inserted files whose metadata (themes, keywords, author, title) came from the tagger database.</summary>
+    /// <summary>Number of catalog files (any media type) enriched with tags from a submitted or approved tagging.</summary>
     public int TaggerFilesMatched { get; set; }
 
-    /// <summary>Non-null when the tagger database could not be reached or queried; seeded files will have empty metadata.</summary>
-    public string? TaggerError { get; set; }
+    /// <summary>Submitted or approved tagger files whose storage key matches no catalog file, so their tags are not published.</summary>
+    public int TaggedFilesNotCataloged { get; set; }
 
-    /// <summary>Human-readable summary message.</summary>
-    public string Message { get; set; } = string.Empty;
-}
+    /// <summary>Up to five storage keys counted in <see cref="TaggedFilesNotCataloged"/>.</summary>
+    public List<string> TaggedFilesNotCatalogedExamples { get; set; } = [];
 
-/// <summary>Summary returned after a successful sound seed operation.</summary>
-public class SoundSeedResult
-{
-    /// <summary>Number of new SoundDataset rows created.</summary>
-    public int DatasetsAdded { get; set; }
-
-    /// <summary>Number of new SoundFileRecord rows inserted.</summary>
-    public int FilesAdded { get; set; }
-
-    /// <summary>Sound files already present in the database that were skipped.</summary>
-    public int FilesSkipped { get; set; }
+    /// <summary>Storage content that was skipped or looked inconsistent. The seed still completes.</summary>
+    public List<string> Warnings { get; set; } = [];
 
     /// <summary>Human-readable summary message.</summary>
     public string Message { get; set; } = string.Empty;
@@ -72,23 +39,10 @@ public class SoundSeedResult
 /// <summary>Summary returned after resetting API-managed database tables.</summary>
 public class ResetDbResult
 {
-    /// <summary>Number of Dataset rows deleted.</summary>
-    public int DatasetsDeleted { get; set; }
-
-    /// <summary>Number of FileRecord rows deleted.</summary>
+    public int CollectionsDeleted { get; set; }
     public int FilesDeleted { get; set; }
-
-    /// <summary>Number of Keyword rows deleted.</summary>
     public int KeywordsDeleted { get; set; }
-
-    /// <summary>Number of Theme rows deleted.</summary>
     public int ThemesDeleted { get; set; }
-
-    /// <summary>Number of SoundDataset rows deleted.</summary>
-    public int SoundDatasetsDeleted { get; set; }
-
-    /// <summary>Number of SoundFileRecord rows deleted.</summary>
-    public int SoundFilesDeleted { get; set; }
 
     /// <summary>Human-readable summary message.</summary>
     public string Message { get; set; } = string.Empty;

@@ -17,19 +17,13 @@ public class ApplicationDbContext : DbContext
     public DbSet<StudentSupervisor> StudentSupervisors { get; set; }
 
     // ── Catalog API entities (ported from the LRLL merge) ──────────────────────
-    public DbSet<Dataset> Datasets { get; set; }
-    public DbSet<FileRecord> FileRecords { get; set; }
+    // Collections and their files are rebuilt from catalog storage by POST /api/seed.
+    public DbSet<Collection> Collections { get; set; }
+    public DbSet<CollectionFile> CollectionFiles { get; set; }
     public DbSet<Keyword> Keywords { get; set; }
     public DbSet<Theme> Themes { get; set; }
     public DbSet<FileDownloadLog> FileDownloadLogs { get; set; }
     public DbSet<DatasetAccessApplication> DatasetAccessApplications { get; set; }
-
-    // Sound (FLAC) entities
-    public DbSet<SoundDataset> SoundDatasets { get; set; }
-    public DbSet<SoundFileRecord> SoundFileRecords { get; set; }
-
-    // Collections catalog (synced from an Excel workbook in blob storage)
-    public DbSet<CollectionEntry> Collections { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -50,6 +44,7 @@ public class ApplicationDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.FileName);
             entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => e.BlobName);
             entity.Property(e => e.FileName).HasMaxLength(500);
             entity.Property(e => e.FileUrl).HasMaxLength(2000);
             entity.Property(e => e.BlobName).HasMaxLength(500);
@@ -113,25 +108,35 @@ public class ApplicationDbContext : DbContext
         });
 
         // ── Catalog API entities (ported from the LRLL merge) ───────────────────
-        // Dataset → FileRecords  (1:many)
-        modelBuilder.Entity<Dataset>()
-            .HasMany(d => d.Files)
-            .WithOne(f => f.Dataset)
-            .HasForeignKey(f => f.DatasetId);
+        modelBuilder.Entity<Collection>(entity =>
+        {
+            entity.Property(c => c.MediaType).HasConversion<string>().HasMaxLength(20);
+            entity.HasMany(c => c.Files)
+                .WithOne(f => f.Collection)
+                .HasForeignKey(f => f.CollectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(c => c.MediaType).HasDatabaseName("idx_collections_mediatype");
+            entity.HasIndex(c => c.Provider).HasDatabaseName("idx_collections_provider");
+            entity.HasIndex(c => c.LanguageCode).HasDatabaseName("idx_collections_language");
+        });
 
-        // FileRecord → Keywords  (1:many)
-        modelBuilder.Entity<FileRecord>()
-            .HasMany(f => f.Keywords)
-            .WithOne(k => k.File)
-            .HasForeignKey(k => k.FileId);
+        modelBuilder.Entity<CollectionFile>(entity =>
+        {
+            entity.Property(f => f.Kind).HasConversion<string>().HasMaxLength(20);
+            entity.HasMany(f => f.Keywords)
+                .WithOne(k => k.File)
+                .HasForeignKey(k => k.FileId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(f => f.Themes)
+                .WithOne(t => t.File)
+                .HasForeignKey(t => t.FileId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(f => f.ContentUrl).IsUnique().HasDatabaseName("idx_collectionfiles_contenturl");
+            entity.HasIndex(f => f.CollectionId).HasDatabaseName("idx_collectionfiles_collection");
+            entity.HasIndex(f => f.Kind).HasDatabaseName("idx_collectionfiles_kind");
+            entity.HasIndex(f => f.Author).HasDatabaseName("idx_collectionfiles_author");
+        });
 
-        // FileRecord → Themes    (1:many)
-        modelBuilder.Entity<FileRecord>()
-            .HasMany(f => f.Themes)
-            .WithOne(t => t.File)
-            .HasForeignKey(t => t.FileId);
-
-        // Indexes mirroring the Python-created DB
         modelBuilder.Entity<Keyword>()
             .HasIndex(k => k.Value).HasDatabaseName("idx_keywords_value");
         modelBuilder.Entity<Keyword>()
@@ -141,28 +146,6 @@ public class ApplicationDbContext : DbContext
             .HasIndex(t => t.Value).HasDatabaseName("idx_themes_value");
         modelBuilder.Entity<Theme>()
             .HasIndex(t => t.FileId).HasDatabaseName("idx_themes_file");
-
-        modelBuilder.Entity<FileRecord>()
-            .HasIndex(f => f.DatasetId).HasDatabaseName("idx_filerecords_dataset");
-        modelBuilder.Entity<FileRecord>()
-            .HasIndex(f => f.Author).HasDatabaseName("idx_filerecords_author");
-        modelBuilder.Entity<FileRecord>()
-            .HasIndex(f => f.DatePublished).HasDatabaseName("idx_filerecords_date");
-
-        // ── Sound (FLAC) entities ─────────────────────────────────────────────
-        modelBuilder.Entity<SoundDataset>()
-            .HasMany(d => d.Files)
-            .WithOne(f => f.Dataset)
-            .HasForeignKey(f => f.SoundDatasetId);
-
-        modelBuilder.Entity<SoundFileRecord>()
-            .HasIndex(f => f.ContentUrl)
-            .IsUnique()
-            .HasDatabaseName("idx_soundfilerecords_contenturl");
-
-        modelBuilder.Entity<SoundFileRecord>()
-            .HasIndex(f => f.SoundDatasetId)
-            .HasDatabaseName("idx_soundfilerecords_dataset");
 
         // ── Rate limiting ─────────────────────────────────────────────────────
         modelBuilder.Entity<FileDownloadLog>()
@@ -180,16 +163,6 @@ public class ApplicationDbContext : DbContext
             entity.HasIndex(a => a.SubmittedAtUtc)
                 .IsDescending()
                 .HasDatabaseName("idx_datasetaccessapplications_submitted");
-        });
-
-        // ── Collections catalog ───────────────────────────────────────────────
-        modelBuilder.Entity<CollectionEntry>(entity =>
-        {
-            entity.HasIndex(c => c.Type).HasDatabaseName("idx_collections_type");
-            entity.HasIndex(c => c.Language).HasDatabaseName("idx_collections_language");
-            entity.HasIndex(c => c.Collected).HasDatabaseName("idx_collections_collected");
-            entity.HasIndex(c => c.Processing).HasDatabaseName("idx_collections_processing");
-            entity.HasIndex(c => c.Availability).HasDatabaseName("idx_collections_availability");
         });
 
         SeedData(modelBuilder);

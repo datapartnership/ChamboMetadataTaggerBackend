@@ -10,3 +10,4 @@ backend.http
 *.http
 *.csv
 .DS_Store
+Catalog/

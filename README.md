@@ -54,12 +54,9 @@ MetadataTagging/
 │   ├── AdminController.cs        # Admin-only endpoints
 │   ├── TaggerController.cs       # Tagger-only endpoints
 │   ├── SupervisorController.cs   # Supervisor-only endpoints
-│   ├── DatasetsController.cs     # Catalog API: text dataset/file Croissant query
-│   ├── FilesController.cs        # Catalog API: text file download
-│   ├── SoundDatasetsController.cs# Catalog API: sound dataset Croissant query
-│   ├── SoundFilesController.cs   # Catalog API: sound file download
-│   ├── CatalogController.cs      # Catalog API: public CKAN-style browser
-│   ├── CollectionCatalogController.cs # Catalog API: collections catalog
+│   ├── CollectionsController.cs  # Catalog API: Croissant query, collection bundle, summary
+│   ├── FilesController.cs        # Catalog API: file download and audio/video bundle
+│   ├── CatalogController.cs      # Catalog API: public collection browser
 │   ├── ApplicationsController.cs # Catalog API: dataset access applications
 │   └── SeedController.cs         # Catalog API: seed/reset catalog tables
 ├── Data/
@@ -77,8 +74,8 @@ MetadataTagging/
 │   ├── FileAssignment.cs         # File assignment entity
 │   ├── FileTag.cs                # File tag entity
 │   ├── AppSettings.cs            # Configuration options classes
-│   └── CatalogModels.cs, SoundCatalogModels.cs, CollectionCatalogModels.cs
-│                                  # Catalog API entities (Dataset, FileRecord, SoundDataset, ...)
+│   └── CollectionModels.cs, CatalogModels.cs
+│                                  # Catalog API entities (Collection, CollectionFile, Keyword, ...)
 ├── Services/
 │   ├── IAuthService.cs           # Authentication service interface
 │   ├── AuthService.cs            # Authentication implementation
@@ -86,11 +83,11 @@ MetadataTagging/
 │   ├── UserService.cs            # User service implementation
 │   ├── IFileService.cs           # File service interface
 │   ├── FileService.cs            # File service implementation
-│   ├── IAzureBlobService.cs      # Azure Blob service interface
-│   ├── AzureBlobService.cs       # Azure Blob service implementation
+│   ├── IFileStorageService.cs    # Storage abstraction (Local / S3 / Azure implementations)
+│   ├── CatalogTagPublisher.cs    # Copies ready tagger tags onto catalog files
 │   ├── EntraTokenClaimsNormalizer.cs, KeycloakTokenClaimsNormalizer.cs
 │   │                              # Federated-login → local role claim normalization
-│   └── ...                       # Catalog API services (CatalogService, FileQueryService, ...)
+│   └── ...                       # Catalog API services (SeedService, CatalogService, CollectionQueryService, ...)
 ├── Swagger/
 │   └── CroissantExampleFilter.cs # Injects a Croissant JSON-LD example into Swagger UI
 ├── Program.cs                    # Application entry point
@@ -103,7 +100,7 @@ MetadataTagging/
 ### Prerequisites
 
 - .NET 8.0 SDK
-- Azure Blob Storage account (for file storage)
+- File storage: Azure Blob Storage, an S3-compatible store, or a local folder (`CatalogStorage`)
 - Visual Studio 2022 or VS Code
 
 ### Configuration
@@ -121,8 +118,7 @@ Copy `.env.example` to `.env` and fill in your values. ASP.NET Core maps environ
 | `JwtSettings__Issuer` | JWT issuer identifier | No (default: `MetadataTaggingAPI`) |
 | `JwtSettings__Audience` | JWT audience identifier | No (default: `MetadataTaggingClient`) |
 | `JwtSettings__ExpiryMinutes` | Token expiry in minutes | No (default: `480`) |
-| `AzureStorage__ConnectionString` | Azure Blob Storage connection string | **Yes** |
-| `AzureStorage__ContainerName` | Azure Blob Storage container name | No (default: `files`) |
+| `CatalogStorage__Provider` | File storage: `local`, `s3`, or `azure` (see `.env.example` for each provider's keys) | No (default: `local`) |
 | `ConnectionStrings__PostgreSQLConnection` | PostgreSQL connection string (required when `DatabaseProvider=postgresql`) | No |
 | `DefaultAdmin__Username` | Default admin username | No |
 | `DefaultAdmin__Email` | Default admin email | No |
@@ -269,7 +265,7 @@ Login with email and password
 ## Catalog API (merged from the Low Resource Language Library API)
 
 This backend also serves the public Low Resource Language Library (LRLL) catalog API,
-which returns **Croissant 1.0 JSON-LD** for text and sound (FLAC) datasets sourced from a
+which returns **Croissant 1.0 JSON-LD** for text, audio, and video collections sourced from a
 shared database with this app's own file-tagging tables. It uses **this app's existing
 authentication** (local email/password JWT, plus optional Entra ID and Keycloak) instead of
 its own former Azure AD-group/Keycloak-role scheme.
@@ -284,26 +280,65 @@ Catalog endpoints use two policies, mapped onto Chambo's Admin/Supervisor/Tagger
 Public/anonymous endpoints (health checks, summaries, the CKAN-style catalog browser, and
 dataset-access application submission) remain unauthenticated.
 
+### Storage layout and seeding
+
+All catalog content lives in a single `CatalogStorage` location laid out as
+`{Provider}/{CollectionFolder}/...`, e.g. `Radio Maria/BIBLE QUIZ/...`. Every collection folder
+becomes one `Collections` row and every file one `CollectionFiles` row. Path segments starting
+with `.` (e.g. checkpoint folders) are ignored. The media type is inferred from the folder's
+contents:
+
+- **Audio / Video** — the folder contains a Croissant `*_metadata.jsonld` file, anywhere inside
+  it (the shallowest one wins). Its `distribution` lists the media files, which may sit in
+  subfolders (e.g. `National Statistics Office/NSO_verbatim_Round1/1367_combined/...`);
+  `.txt` / `text/*` entries are transcriptions, paired with the media file of the same stem
+  (`ep01.flac` ↔ `ep01.txt` or `ep01.flac.txt`). The collection is Video if any listed file is
+  video, otherwise Audio. Each entry's `sc:contentUrl` gives its path; if that file isn't in
+  storage, the only file in the collection with the same name is used instead.
+- **Text** — no metadata file. PDF/TXT/MD files are discovered by scanning the folder.
+
+### From tagging to the catalog
+
+Taggers work on the same `CatalogStorage` files the catalog serves, so a tagged file's
+`FileMetadata.BlobName` is exactly its `CollectionFiles.ContentUrl` (both stored without a
+leading `./` or `/`). The admin blob list only offers files inside a `Provider/Collection/` folder
+that the seed can catalog (hidden files and `*_metadata.jsonld` are skipped).
+
+Tags from submitted or approved files are applied to the matching catalog file: keywords,
+themes and author for every media type, plus the title as the display name of text files.
+Collection-level keywords and themes are recomputed from their files. This happens both during
+`POST /api/seed` and immediately whenever a tagger submits, or a supervisor approves, edits or
+sends back a file (a sent-back file's catalog values revert to what storage provides), so the
+catalog does not wait for a re-seed.
+
+`POST /api/seed` performs a full sync: collections and files get deterministic IDs derived from
+their storage paths (or the jsonld `sc:identifier`), existing rows are updated in place, and rows
+whose files no longer exist in storage are deleted. The response reports added/updated/deleted
+counts per media type plus warnings (unexpected folders, missing jsonld, files listed but not
+found, ...). `taggedFilesNotCataloged` counts submitted/approved tagger files that match no
+catalog file (unsupported extension, outside the layout, or missing from storage).
+
 ### Endpoints
 
-- `GET /api/datasets/query` (Read) / `GET /api/datasets/health`, `/summary` (anonymous) —
-  text dataset/file Croissant JSON-LD query, health check, and aggregate summary.
-- `GET /api/files/{id}` (Read) — download a text file's content (daily rate-limited via
-  `RateLimit:DailyFileDownloadLimit`).
-- `GET /api/sound/query` (Read) / `GET /api/sound/health` (anonymous) — sound (FLAC)
-  dataset Croissant JSON-LD query and health check.
-- `GET /api/sound/files/{id}` (Read) — download an audio file.
-- `GET /api/catalog/datasets`, `/datasets/{id}`, `/files`, `/sound/datasets`,
-  `/sound/datasets/{id}`, `/facets` (anonymous) — paginated CKAN-style catalog browser data.
-- `GET /api/catalog/collections`, `/collections/{id}`, `/collections/facets` (anonymous) /
-  `POST /api/catalog/collections/sync` (Write) — collections catalog, synced from an Excel
-  workbook in blob storage.
+- `POST /api/seed` (Write) — scan storage and sync the catalog tables.
+  `POST /api/seed/reset-db` (Write) — empty the catalog tables. Neither touches this app's own
+  Users/FileMetadata/FileAssignments/FileTags/StudentSupervisors tables.
+- `GET /api/catalog/collections`, `/{id}`, `/{id}/files`, `/facets` (anonymous) — paginated
+  collection browser data.
+- `GET /api/collections/query` (Read) — Croissant JSON-LD query across collections, filterable
+  by `mediaType`, `collectionId`, `provider`, `language`, `keyword`, `theme`, `author`, `year`.
+  Media file entries carry their transcription as `ddpv:transcription` plus a `ddpv:bundleUrl`;
+  audio/video collection nodes carry their own `ddpv:bundleUrl`.
+- `GET /api/collections/{id}/bundle` (Read) — whole audio/video collection (every media file,
+  its transcription, and a `metadata.jsonld`) as a streamed ZIP. Not available for text.
+- `GET /api/collections/summary`, `/health` (anonymous) — aggregate summary and health check.
+- `GET /api/files/{id}` (Read) — download a file. Text (TXT/MD, and the text extracted from
+  PDFs) is returned as shuffled paragraphs and counts toward `RateLimit:DailyFileDownloadLimit`;
+  audio/video are streamed as-is.
+- `GET /api/files/{id}/bundle` (Read) — an audio/video file together with its transcription as
+  a ZIP.
 - `POST /api/applications` (anonymous) / `GET /api/applications` (Write) — dataset access
   application intake and review.
-- `POST /api/seed`, `/seed/sound`, `POST /api/seed/reset-db` (all Write) — populate/reset the
-  catalog tables (text and sound) from the configured storage, or generate dummy data. These
-  never touch this app's own Users/FileMetadata/FileAssignments/FileTags/StudentSupervisors
-  tables.
 
 ### Configuration
 
@@ -314,17 +349,15 @@ list of environment-variable equivalents):
   `Keycloak:Authority` to enable it. `Keycloak:RoleMappings` maps Keycloak client roles
   (`resource_access[ClientId].roles`) onto `Admin`/`Supervisor`/`Tagger`, the same way
   `EntraId:GroupRoleMappings` does for Entra ID groups.
-- `CatalogStorage` — file storage for the public catalog (local disk, S3-compatible, or Azure
-  Blob Storage), with dedicated sub-locations for text, sound, and the collections workbook.
-  Deliberately separate from this app's own `Storage` section (used for the tagging inbox).
-- `CollectionCatalog` — controls whether/how the Collections catalog Excel workbook is synced
-  on startup and via the manual sync endpoint.
+- `CatalogStorage` — the only file storage (local disk, S3-compatible, or Azure Blob Storage),
+  a single location using the layout described above, shared by the tagging workflow and the
+  catalog API. The former `Storage` section (tagging inbox) has been removed.
 - `RateLimit` — daily per-user file download cap for the catalog API (`0` = unlimited).
 
 ### Database and migrations
 
-The catalog API's tables (`Datasets`, `FileRecords`, `Keywords`, `Themes`, `SoundDatasets`,
-`SoundFileRecords`, `Collections`, `DatasetAccessApplications`, `FileDownloadLogs`) live in
+The catalog API's tables (`Collections`, `CollectionFiles`, `Keywords`, `Themes`,
+`DatasetAccessApplications`, `FileDownloadLogs`) live in
 the same `ApplicationDbContext`/database as this app's own tables, and share its `FileMetadata`/
 `FileTags` tables directly (no separate read-only "tagger database" connection is used anymore).
 
@@ -332,16 +365,17 @@ Schema is now managed via **EF Core Migrations** instead of `EnsureCreated()`. T
 `InitialBaseline` migration captures the complete merged schema (this app's pre-existing
 tables plus the new catalog tables) as of the merge.
 
-> **Deploying to an already-provisioned database** (e.g. an existing production database
-> created via `EnsureCreated()`): running `dotnet ef database update` naively would attempt to
-> re-create tables that already have data. Instead:
-> 1. Generate the SQL with `dotnet ef migrations script --idempotent`.
-> 2. From that script, apply only the `CREATE TABLE`/index statements for the **new** catalog
->    tables listed above (skip the statements for `Users`, `FileMetadata`, `FileAssignments`,
->    `FileTags`, `StudentSupervisors`, which already exist).
-> 3. Insert a row for `InitialBaseline` into `__EFMigrationsHistory` so future
->    `dotnet ef database update` runs treat it as already applied and only apply genuinely new
->    future migrations.
+> **Moving from a pre-migrations database** (one created via `EnsureCreated()`, which fails
+> startup with `relation "FileMetadata" already exists`):
+> 1. Deploy once with `Database__ResetOnStartup=true`. On startup every table is dropped and the
+>    schema is rebuilt from the migrations. **Set it back to `false` straight after**; while it is
+>    `true`, every restart wipes all data.
+> 2. Sign in as an Admin and post a plain-SQL `pg_dump` of the old database to
+>    `POST /api/admin/import-taggings` (multipart: `dump`, `taggerEmail`, `approverEmail`).
+>    Files, tags and assignments are imported with their original ids; all taggings are
+>    attributed to `taggerEmail` and all assignments/approvals to `approverEmail` (both users are
+>    created if missing and taken over on their first Entra ID sign-in). Old users and
+>    student/supervisor links are not imported, and one assignment is kept per file.
 
 ## Usage Examples
 

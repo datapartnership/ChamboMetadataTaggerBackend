@@ -1,353 +1,471 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using MetadataTagging.Data;
-using MetadataTagging.Models;
 using MetadataTagging.DTOs;
+using MetadataTagging.Models;
 
 namespace MetadataTagging.Services;
 
 /// <summary>
-/// Scans the configured file storage (local disk or S3) and populates the database
-/// with file metadata, reading keywords and themes from Chambo's own FileMetadata/FileTags
-/// tables (same ApplicationDbContext/database) when available and falling back to random
-/// UNBIS taxonomy values otherwise. Mirrors the logic of seed_metadata.py.
+/// Rebuilds the <see cref="Collection"/> / <see cref="CollectionFile"/> tables from catalog
+/// storage, which is laid out as <c>Provider/CollectionFolder/...</c>. The media type is
+/// inferred from the folder's contents:
+/// <list type="bullet">
+/// <item>A folder with a <c>*_metadata.jsonld</c> file (anywhere inside it) is an audio or video
+/// collection; the jsonld lists its media files and their transcriptions, which may live in
+/// subfolders. It is a video collection when any listed file is video.</item>
+/// <item>A folder without one is a text collection: its PDF/TXT/MD files are scanned.</item>
+/// </list>
+/// Every file is enriched with the tags of its ready tagger entry (see <see cref="CatalogTagPublisher"/>).
+/// Each run is a full sync: new rows are inserted, changed rows updated, and rows whose
+/// content is no longer in storage deleted. IDs are derived from storage paths (or the
+/// jsonld identifier), so they stay stable across runs.
 /// </summary>
-public class SeedService(ApplicationDbContext db, IFileStorageService storage)
+public class SeedService(
+    ApplicationDbContext db, IFileStorageService storage, CroissantMetadataParser parser, CatalogTagPublisher publisher)
 {
-    // ── UNBIS taxonomy ────────────────────────────────────────────────────────
+    private static readonly HashSet<string> TextExtensions =
+        new(StringComparer.OrdinalIgnoreCase) { ".pdf", ".txt", ".md" };
 
-    private static readonly string[] Themes =
-    [
-        "Agriculture Forestry and Fishing",
-        "Culture",
-        "Economic Development and Development Finance",
-        "Education",
-        "Employment",
-        "Geographical Descriptors",
-        "Health",
-        "Human Settlements",
-        "Humanitarian Aid and Relief",
-        "Industry",
-        "International Trade",
-        "Natural Resources and the Environment",
-        "Organizational Questions",
-        "Political and Legal Questions",
-        "Population",
-        "Science and Technology",
-        "Social Conditions and Equity",
-        "Transport and Communications",
-    ];
-
-    private static readonly Dictionary<string, string[]> KeywordPools = new()
+    private static readonly HashSet<string> MediaExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["Agriculture Forestry and Fishing"] =
-        [
-            "maize", "tobacco", "farming", "drought", "harvest", "irrigation",
-            "smallholder", "fertilizer", "crop", "fisheries", "deforestation",
-            "livestock", "agribusiness", "food security", "seeds",
-        ],
-        ["Culture"] =
-        [
-            "tradition", "festival", "arts", "heritage", "music", "dance",
-            "literature", "identity", "ceremony", "language", "folklore",
-            "religion", "customs", "community", "celebration",
-        ],
-        ["Economic Development and Development Finance"] =
-        [
-            "GDP", "investment", "donor", "budget", "IMF", "World Bank",
-            "inflation", "kwacha", "poverty", "microfinance", "grants",
-            "development", "economic growth", "remittances", "taxation",
-        ],
-        ["Education"] =
-        [
-            "school", "university", "MSCE", "literacy", "teachers", "curriculum",
-            "enrolment", "MANEB", "scholarships", "dropout", "STEM",
-            "primary education", "secondary education", "TEVET", "bursary",
-        ],
-        ["Employment"] =
-        [
-            "jobs", "unemployment", "wages", "labour", "workers", "strike",
-            "trade union", "minimum wage", "retrenchment", "hiring",
-            "informal sector", "skills", "youth employment", "salaries", "benefits",
-        ],
-        ["Geographical Descriptors"] =
-        [
-            "Lilongwe", "Blantyre", "Mzuzu", "Zomba", "Northern Region",
-            "Southern Region", "Central Region", "Lake Malawi", "Shire River",
-            "Dedza", "Mangochi", "Karonga", "Nkhata Bay", "Kasungu", "Mulanje",
-        ],
-        ["Health"] =
-        [
-            "malaria", "HIV", "cholera", "clinic", "hospital", "vaccination",
-            "maternal health", "nutrition", "mental health", "nurses", "doctors",
-            "CHAM", "disease outbreak", "health budget", "medicines",
-        ],
-        ["Human Settlements"] =
-        [
-            "housing", "urban planning", "slums", "water supply", "sanitation",
-            "land rights", "infrastructure", "township", "settlement",
-            "displacement", "construction", "property", "zoning", "municipality", "city council",
-        ],
-        ["Humanitarian Aid and Relief"] =
-        [
-            "flood relief", "NGO", "aid", "refugees", "displacement",
-            "emergency", "Red Cross", "UNHCR", "food aid", "disaster",
-            "cyclone", "drought relief", "camps", "humanitarian", "donations",
-        ],
-        ["Industry"] =
-        [
-            "manufacturing", "factory", "textile", "cement", "sugar",
-            "brewery", "export", "production", "MIPA", "SME",
-            "industrial zone", "workers", "enterprise", "supply chain", "raw materials",
-        ],
-        ["International Trade"] =
-        [
-            "exports", "imports", "COMESA", "SADC", "tariffs", "trade deficit",
-            "forex", "commodities", "trade agreement", "customs", "WTO",
-            "balance of payments", "smuggling", "border", "trade route",
-        ],
-        ["Natural Resources and the Environment"] =
-        [
-            "climate change", "deforestation", "wildlife", "national park",
-            "pollution", "mining", "oil", "gas", "water resources",
-            "biodiversity", "conservation", "carbon", "emissions", "ecosystem", "environment",
-        ],
-        ["Organizational Questions"] =
-        [
-            "government", "parliament", "cabinet", "ministry", "parastatal",
-            "reform", "civil service", "decentralization", "audit", "accountability",
-            "transparency", "governance", "institution", "policy", "regulation",
-        ],
-        ["Political and Legal Questions"] =
-        [
-            "election", "MCP", "DPP", "UTM", "court", "constitution",
-            "human rights", "corruption", "ACB", "judiciary", "legislation",
-            "democracy", "opposition", "political party", "rule of law",
-        ],
-        ["Population"] =
-        [
-            "census", "birth rate", "migration", "urbanisation", "demographics",
-            "family planning", "population growth", "youth", "elderly",
-            "gender", "women", "children", "statistics", "NSO", "household",
-        ],
-        ["Science and Technology"] =
-        [
-            "internet", "mobile money", "innovation", "startup", "AI",
-            "solar energy", "4G", "fintech", "e-government", "data",
-            "research", "ICT", "digital", "biotechnology", "engineering",
-        ],
-        ["Social Conditions and Equity"] =
-        [
-            "poverty", "inequality", "gender-based violence", "marriage",
-            "divorce", "children", "disability", "social protection",
-            "MASAF", "welfare", "orphans", "community", "family", "rights", "inclusion",
-        ],
-        ["Transport and Communications"] =
-        [
-            "roads", "M1 highway", "bridge", "NICO", "Malawi Railways",
-            "bus", "minibus", "airport", "Kamuzu International", "media",
-            "radio", "television", "newspaper", "MBC", "telecommunications",
-        ],
+        ".flac", ".mp3", ".wav", ".ogg", ".opus", ".m4a", ".aac", ".wma", ".aif", ".aiff",
+        ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mpg", ".mpeg", ".wmv", ".ts",
     };
 
-    private static readonly string[] SampleAuthors =
-    [
-        "Martin Gela", "Grace Kamange", "Kondwani Munthali", "Tadala Mwale",
-        "Chikondi Phiri", "Yankho Banda", "Mphatso Chirwa", "Tiyamike Nkhoma",
-        "Limbani Tembo", "Fatsani Gondwe", "Dalitso Mkandawire", "Pemphero Msiska",
-        "Lusungu Nkosi", "Takondwa Kayira", "Chisomo Kalimba",
-    ];
+    private const int MaxWarningExamples = 5;
 
-    private static readonly HashSet<string> SupportedExtensions =
-        new(StringComparer.OrdinalIgnoreCase) { ".pdf", ".txt", ".md" };
+    private sealed record CollectionFolder(string Provider, string Name, string Prefix, List<StorageFileEntry> Entries)
+    {
+        /// <summary>Metadata files, closest to the collection root first.</summary>
+        public List<StorageFileEntry> MetadataEntries { get; } = [];
+    }
+
+    private sealed record BuiltCollection(Collection Collection, List<CollectionFile> Files);
 
     // ── Public entry point ───────────────────────────────────────────────────
 
-    public Task<SeedResult> SeedAsync(SeedRequest request, CancellationToken ct = default) =>
-        request.Mode == SeedMode.Dummy
-            ? SeedDummyAsync(request, ct)
-            : SeedFromStorageAsync(ct);
-
-    // ── Scan storage ─────────────────────────────────────────────────────────
-
-    private async Task<SeedResult> SeedFromStorageAsync(CancellationToken ct)
+    public async Task<SeedResult> SeedAsync(CancellationToken ct = default)
     {
-        var allFiles = await storage.ListFilesAsync("", ct);
+        var result = new SeedResult();
+        foreach (var mediaType in Enum.GetValues<MediaType>())
+            result.ByMediaType[mediaType.ToString()] = new SeedCounts();
 
-        // Pre-load tagger tags keyed by normalised BlobName so we avoid N+1 queries
-        var contentUrls = allFiles
-            .Select(f => f.Key.StartsWith("./") ? f.Key : $"./{f.Key}")
-            .ToList();
-        var (taggerLookup, taggerError) = await LoadTaggerLookupAsync(contentUrls, ct);
+        var entries = await storage.ListFilesAsync("", ct);
+        var folders = GroupByCollection(entries, result.Warnings);
+        var taggerLookup = await publisher.LoadReadyAsync(ct: ct);
 
-        // Keep only supported file types, group by top-level directory = media house
-        var filesByHouse = allFiles
-            .Where(f => SupportedExtensions.Contains(Path.GetExtension(f.Key)))
-            .GroupBy(f =>
-            {
-                var slash = f.Key.IndexOf('/');
-                return slash > 0 ? f.Key[..slash] : string.Empty;
-            })
-            .Where(g => !string.IsNullOrEmpty(g.Key))
-            .ToDictionary(g => g.Key, g => g.ToList());
-
-        int datasetsCreated = 0, filesInserted = 0, filesSkipped = 0, taggerFilesMatched = 0;
-
-        foreach (var (houseName, files) in filesByHouse)
+        var built = new List<BuiltCollection>();
+        foreach (var folder in folders)
         {
-            if (await EnsureDatasetAsync(houseName, ct)) datasetsCreated++;
+            var collection = folder.MetadataEntries.Count > 0
+                ? await BuildMediaCollectionAsync(folder, result.Warnings, ct)
+                : await BuildTextCollectionAsync(folder, taggerLookup, result, ct);
+            if (collection is null)
+                continue;
+            if (collection.Collection.MediaType != MediaType.Text)
+                ApplyTaggerData(collection.Files, taggerLookup, result);
+            built.Add(collection);
+        }
 
-            foreach (var entry in files)
+        ReportTaggedFilesNotCataloged(built, taggerLookup, result);
+        EnsureUniqueCollectionIds(built, result.Warnings);
+        await SyncAsync(built, result, ct);
+
+        var t = result.Totals;
+        result.Message =
+            $"Seed complete: {t.CollectionsAdded} collection(s) added, {t.CollectionsUpdated} updated, " +
+            $"{t.CollectionsDeleted} deleted; {t.FilesAdded} file(s) added, {t.FilesUpdated} updated, " +
+            $"{t.FilesDeleted} deleted; {result.Warnings.Count} warning(s).";
+        return result;
+    }
+
+    // ── Storage layout ───────────────────────────────────────────────────────
+
+    private static List<CollectionFolder> GroupByCollection(IReadOnlyList<StorageFileEntry> entries, List<string> warnings)
+    {
+        var folders = new Dictionary<string, CollectionFolder>(StringComparer.Ordinal);
+        var outsideLayout = new List<string>();
+
+        foreach (var entry in entries)
+        {
+            var key = CatalogKey.Normalize(entry.Key);
+            var segments = key.Split('/');
+
+            // Hidden files and folders (.DS_Store, pipeline checkpoints, ...) are never catalog content.
+            if (segments.Any(s => s.StartsWith('.')))
+                continue;
+
+            if (segments.Length < 3 || segments.Take(2).Any(s => s.Length == 0))
             {
-                var contentUrl = entry.Key.StartsWith("./") ? entry.Key : $"./{entry.Key}";
+                outsideLayout.Add(key);
+                continue;
+            }
 
-                if (await db.FileRecords.AnyAsync(f => f.ContentUrl == contentUrl, ct))
-                {
-                    filesSkipped++;
-                    continue;
-                }
+            var prefix = $"{segments[0]}/{segments[1]}";
+            if (!folders.TryGetValue(prefix, out var folder))
+                folders[prefix] = folder = new CollectionFolder(segments[0], segments[1], prefix, []);
+            folder.Entries.Add(entry with { Key = key });
+        }
 
-                // For local files compute a real SHA-256; for S3 use the ETag to avoid
-                // downloading potentially hundreds of megabytes per file.
-                var sha256 = entry.ETag is { Length: > 0 } etag
-                    ? etag
-                    : await ComputeSha256Async(entry.Key, ct);
+        if (outsideLayout.Count > 0)
+            warnings.Add(
+                $"{outsideLayout.Count} file(s) are not inside a Provider/Collection folder and were ignored " +
+                $"(e.g. {string.Join(", ", outsideLayout.Take(MaxWarningExamples))}).");
 
-                var (themes, keywords, author, title) = ExtractTaggerData(contentUrl, taggerLookup);
-                if (themes.Length > 0 || keywords.Length > 0 || author is not null || title is not null)
-                    taggerFilesMatched++;
+        foreach (var folder in folders.Values)
+            folder.MetadataEntries.AddRange(folder.Entries
+                .Where(e => e.Key.EndsWith(CroissantMetadataParser.MetadataFileSuffix, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(e => e.Key.Count(c => c == '/'))
+                .ThenBy(e => e.Key, StringComparer.Ordinal));
 
-                var ext = Path.GetExtension(entry.Key).ToLowerInvariant();
+        return [.. folders.Values.OrderBy(f => f.Prefix, StringComparer.Ordinal)];
+    }
 
-                // PDFs are binary-compressed (~6 bytes per character); plain-text
-                // formats (.txt, .md) have a 1:1 size-to-character ratio.
-                var charEst  = ext == ".pdf" ? (int)(entry.Size / 6) : (int)entry.Size;
-                var wordEst  = charEst / 5;
-                var tokenEst = charEst / 4;
+    // ── Text collections ─────────────────────────────────────────────────────
 
-                var encodingFormat = ext switch
+    private async Task<BuiltCollection?> BuildTextCollectionAsync(
+        CollectionFolder folder, Dictionary<string, TaggerData> taggerLookup, SeedResult result, CancellationToken ct)
+    {
+        var textEntries = folder.Entries
+            .Where(e => TextExtensions.Contains(Path.GetExtension(e.Key)))
+            .OrderBy(e => e.Key, StringComparer.Ordinal)
+            .ToList();
+
+        if (textEntries.Count == 0)
+        {
+            result.Warnings.Add(folder.Entries.Any(e => MediaExtensions.Contains(Path.GetExtension(e.Key)))
+                ? $"Collection '{folder.Prefix}' contains audio/video but no *{CroissantMetadataParser.MetadataFileSuffix} file and was skipped."
+                : $"Collection '{folder.Prefix}' has no *{CroissantMetadataParser.MetadataFileSuffix} file and no .pdf, .txt, or .md files and was skipped.");
+            return null;
+        }
+
+        var collection = new Collection
+        {
+            Id            = CroissantMetadataParser.CollectionId(folder.Prefix),
+            Name          = folder.Name,
+            Provider      = folder.Provider,
+            MediaType     = MediaType.Text,
+            StoragePrefix = folder.Prefix,
+            Creator       = folder.Provider,
+            Publisher     = folder.Provider,
+        };
+
+        var files = new List<CollectionFile>();
+        foreach (var entry in textEntries)
+        {
+            // For local files compute a real SHA-256; for S3/Azure use the ETag to avoid
+            // downloading potentially hundreds of megabytes per file.
+            var sha256 = entry.ETag is { Length: > 0 } etag
+                ? etag
+                : await ComputeSha256Async(entry.Key, ct);
+
+            var ext = Path.GetExtension(entry.Key).ToLowerInvariant();
+
+            // PDFs are binary-compressed (~6 bytes per character); plain-text
+            // formats (.txt, .md) have a 1:1 size-to-character ratio.
+            var charEst = ext == ".pdf" ? (int)(entry.Size / 6) : (int)entry.Size;
+
+            files.Add(new CollectionFile
+            {
+                Id             = CroissantMetadataParser.FileId(entry.Key),
+                CollectionId   = collection.Id,
+                ContentUrl     = entry.Key,
+                Kind           = FileKind.Text,
+                EncodingFormat = ext switch
                 {
                     ".txt" => "text/plain",
                     ".md"  => "text/markdown",
                     _      => "application/pdf",
-                };
-
-                db.FileRecords.Add(new FileRecord
-                {
-                    Id             = $"file-{houseName}-{Guid.NewGuid().ToString("N")[..8]}",
-                    DatasetId      = DatasetId(houseName),
-                    Name           = title ?? Path.GetFileName(entry.Key),
-                    ContentUrl     = contentUrl,
-                    ContentSize    = entry.Size,
-                    Sha256         = sha256,
-                    Author         = author,
-                    DatePublished  = entry.LastModified.ToString("O"),
-                    DateModified   = entry.LastModified.ToString("O"),
-                    EncodingFormat = encodingFormat,
-                    WordCount      = wordEst,
-                    CharCount      = charEst,
-                    TokenCount     = tokenEst,
-                    NumberOfPages  = 1,
-                    Keywords       = [.. keywords.Select(kw => new Keyword { Value = kw })],
-                    Themes         = [.. themes.Select(th => new Theme   { Value = th })],
-                });
-                filesInserted++;
-            }
+                },
+                ContentSize    = entry.Size,
+                Sha256         = sha256,
+                DatePublished  = entry.LastModified.ToString("O"),
+                DateModified   = entry.LastModified.ToString("O"),
+                WordCount      = charEst / 5,
+                CharCount      = charEst,
+                TokenCount     = charEst / 4,
+                NumberOfPages  = 1,
+            });
         }
 
-        await db.SaveChangesAsync(ct);
-        return new SeedResult
-        {
-            DatasetsCreated     = datasetsCreated,
-            FilesInserted       = filesInserted,
-            FilesSkipped        = filesSkipped,
-            TaggerFilesMatched  = taggerFilesMatched,
-            TaggerError         = taggerError,
-            Message             = $"Scan complete: {datasetsCreated} dataset(s) created, " +
-                                  $"{filesInserted} file(s) inserted, {filesSkipped} skipped, " +
-                                  $"{taggerFilesMatched} enriched from tagger.",
-        };
+        ApplyTaggerData(files, taggerLookup, result);
+        collection.Keywords = CatalogTagPublisher.TopValues(files.SelectMany(f => f.Keywords.Select(k => k.Value)));
+        collection.Themes   = CatalogTagPublisher.TopValues(files.SelectMany(f => f.Themes.Select(t => t.Value)));
+
+        var dates = textEntries.Select(e => e.LastModified).ToList();
+        collection.StartYear     = dates.Min().Year;
+        collection.EndYear       = dates.Max().Year;
+        collection.DatePublished = dates.Min().ToString("O");
+        collection.DateModified  = dates.Max().ToString("O");
+
+        FinalizeCollection(collection, files);
+        return new BuiltCollection(collection, files);
     }
 
-    // ── Dummy data ────────────────────────────────────────────────────────────
+    // ── Tagger integration ───────────────────────────────────────────────────
 
-    private async Task<SeedResult> SeedDummyAsync(SeedRequest request, CancellationToken ct)
+    private static void ApplyTaggerData(List<CollectionFile> files, Dictionary<string, TaggerData> taggerLookup, SeedResult result)
     {
-        var houses = string.IsNullOrWhiteSpace(request.DummyHouses)
-            ? ["MediaHouseA", "MediaHouseB", "MediaHouseC", "MediaHouseD"]
-            : request.DummyHouses
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        int datasetsCreated = 0, filesInserted = 0;
-
-        foreach (var houseName in houses)
+        foreach (var file in files)
         {
-            if (await EnsureDatasetAsync(houseName, ct)) datasetsCreated++;
+            var data = taggerLookup.GetValueOrDefault(file.ContentUrl);
+            if (data is not null)
+                result.TaggerFilesMatched++;
+            CatalogTagPublisher.ApplyTo(file, data);
+        }
+    }
 
-            for (int i = 0; i < request.DummyFilesPerHouse; i++)
+    private static void ReportTaggedFilesNotCataloged(
+        List<BuiltCollection> built, Dictionary<string, TaggerData> taggerLookup, SeedResult result)
+    {
+        var cataloged = built
+            .SelectMany(b => b.Files.Select(f => f.ContentUrl))
+            .ToHashSet(StringComparer.Ordinal);
+        var missed = taggerLookup.Keys
+            .Where(k => !cataloged.Contains(k))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        if (missed.Count == 0)
+            return;
+
+        result.TaggedFilesNotCataloged = missed.Count;
+        result.TaggedFilesNotCatalogedExamples = [.. missed.Take(MaxWarningExamples)];
+        result.Warnings.Add(
+            $"{missed.Count} submitted or approved tagged file(s) match no catalog file, so their tags are not in the catalog " +
+            $"(e.g. {string.Join(", ", result.TaggedFilesNotCatalogedExamples)}). Check they are .pdf/.txt/.md files or listed " +
+            "media inside a Provider/Collection folder, and that they still exist in storage.");
+    }
+
+    // ── Audio / video collections ────────────────────────────────────────────
+
+    private async Task<BuiltCollection?> BuildMediaCollectionAsync(
+        CollectionFolder folder, List<string> warnings, CancellationToken ct)
+    {
+        var metadataEntries = folder.MetadataEntries;
+        var metadataKey = metadataEntries[0].Key;
+        if (metadataEntries.Count > 1)
+            warnings.Add($"Collection '{folder.Prefix}' has {metadataEntries.Count} metadata files; using '{metadataKey}'.");
+
+        Collection collection;
+        List<CollectionFile> files;
+        try
+        {
+            string json;
+            await using (var stream = await storage.OpenReadAsync(metadataKey, ct))
+            using (var reader = new StreamReader(stream))
+                json = await reader.ReadToEndAsync(ct);
+
+            (collection, files) = parser.Parse(json, folder.Prefix, folder.Provider, MediaType.Audio);
+            // Re-parse so files without a recognizable format default to video, like the rest of the collection.
+            if (files.Any(f => f.Kind == FileKind.Video))
+                (collection, files) = parser.Parse(json, folder.Prefix, folder.Provider, MediaType.Video);
+        }
+        catch (JsonException ex)
+        {
+            warnings.Add($"Metadata file '{metadataKey}' is not valid JSON and its collection was skipped: {ex.Message}");
+            return null;
+        }
+
+        var inStorage = folder.Entries.ToDictionary(e => e.Key, StringComparer.Ordinal);
+        var relocated = RelocateByFileName(files, folder.Entries, inStorage);
+        if (relocated > 0)
+            warnings.Add(
+                $"{relocated} file(s) listed in '{metadataKey}' were not at their listed path " +
+                "and were matched to a storage file by name.");
+
+        files = [.. files.GroupBy(f => f.Id).Select(g => g.First())];
+
+        var missing = 0;
+        foreach (var file in files)
+        {
+            if (!inStorage.TryGetValue(file.ContentUrl, out var entry))
             {
-                var date      = RandomDateInYear(Random.Shared.Next(2022, 2026));
-                var fakeName  = $"Article_{date:yyyyMMdd}_p{i + 1:D3}.pdf";
-                var fakePath  = $"./{houseName}/{fakeName}";
-                var charCount = Random.Shared.Next(800, 5001);
-                var themes    = PickRandomThemes();
-                var keywords  = PickRandomKeywords(themes);
+                missing++;
+                continue;
+            }
+            file.ContentSize  ??= entry.Size;
+            file.DateModified ??= entry.LastModified.ToString("O");
+        }
+        if (missing > 0)
+            warnings.Add($"{missing} file(s) listed in '{metadataKey}' were not found in storage.");
 
-                db.FileRecords.Add(new FileRecord
+        var listed = files.Select(f => f.ContentUrl).ToHashSet(StringComparer.Ordinal);
+        var unlisted = folder.Entries.Count(e => MediaExtensions.Contains(Path.GetExtension(e.Key)) && !listed.Contains(e.Key));
+        if (unlisted > 0)
+            warnings.Add($"{unlisted} media file(s) in '{folder.Prefix}' are not listed in '{metadataKey}' and were not cataloged.");
+
+        var documents = folder.Entries.Count(e =>
+            Path.GetExtension(e.Key).ToLowerInvariant() is ".pdf" or ".md" && !listed.Contains(e.Key));
+        if (documents > 0)
+            warnings.Add(
+                $"{documents} .pdf/.md file(s) in '{folder.Prefix}' were not cataloged: a folder with a metadata file " +
+                "is an audio/video collection.");
+
+        FinalizeCollection(collection, files);
+        return new BuiltCollection(collection, files);
+    }
+
+    /// <summary>
+    /// Points files whose resolved key is not in storage at the collection's only storage file
+    /// with the same name, then re-pairs transcriptions since the IDs changed.
+    /// </summary>
+    /// <returns>Number of files relocated.</returns>
+    private static int RelocateByFileName(
+        List<CollectionFile> files, List<StorageFileEntry> entries, Dictionary<string, StorageFileEntry> inStorage)
+    {
+        var claimed = files.Select(f => f.ContentUrl).Where(inStorage.ContainsKey).ToHashSet(StringComparer.Ordinal);
+        var byName = entries
+            .Where(e => !claimed.Contains(e.Key))
+            .GroupBy(e => Path.GetFileName(e.Key), StringComparer.Ordinal)
+            .Where(g => g.Count() == 1)
+            .ToDictionary(g => g.Key, g => g.Single().Key, StringComparer.Ordinal);
+
+        var relocated = 0;
+        foreach (var file in files.Where(f => !inStorage.ContainsKey(f.ContentUrl)))
+        {
+            if (!byName.Remove(Path.GetFileName(file.ContentUrl), out var key))
+                continue;
+            file.ContentUrl = key;
+            file.Id         = CroissantMetadataParser.FileId(key);
+            relocated++;
+        }
+
+        if (relocated > 0)
+        {
+            foreach (var file in files)
+                file.TranscriptionFileId = null;
+            CroissantMetadataParser.PairTranscriptions(files);
+        }
+        return relocated;
+    }
+
+    private static void FinalizeCollection(Collection collection, List<CollectionFile> files)
+    {
+        var primary = files.Where(f => f.Kind != FileKind.Transcription).ToList();
+        var durations = primary.Where(f => f.Duration.HasValue).Select(f => f.Duration!.Value).ToList();
+
+        collection.FileCount            = primary.Count;
+        collection.TotalDurationSeconds = durations.Count > 0 ? durations.Sum() : null;
+        collection.Formats              = primary.Count > 0
+            ? string.Join(",", primary.Select(f => f.EncodingFormat).Distinct(StringComparer.OrdinalIgnoreCase).Order())
+            : null;
+    }
+
+    /// <summary>Two folders reusing one jsonld <c>sc:identifier</c> would collide; later ones fall back to a path-based ID.</summary>
+    private static void EnsureUniqueCollectionIds(List<BuiltCollection> built, List<string> warnings)
+    {
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (collection, files) in built)
+        {
+            if (used.Add(collection.Id))
+                continue;
+
+            var fallback = CroissantMetadataParser.CollectionId(collection.StoragePrefix);
+            warnings.Add(
+                $"Collection '{collection.StoragePrefix}' reuses identifier '{collection.Id}'; it was assigned '{fallback}' instead.");
+            collection.Id = fallback;
+            used.Add(fallback);
+            foreach (var file in files)
+                file.CollectionId = fallback;
+        }
+    }
+
+    // ── Database sync ────────────────────────────────────────────────────────
+
+    private async Task SyncAsync(List<BuiltCollection> built, SeedResult result, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+
+        var existingCollections = await db.Collections.ToDictionaryAsync(c => c.Id, ct);
+        var existingFiles = await db.CollectionFiles
+            .Include(f => f.Keywords)
+            .Include(f => f.Themes)
+            .AsSplitQuery()
+            .ToDictionaryAsync(f => f.Id, ct);
+        var previousMediaType = existingCollections.Values.ToDictionary(c => c.Id, c => c.MediaType);
+
+        var seenCollections = new HashSet<string>(StringComparer.Ordinal);
+        var seenFiles = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var (collection, files) in built)
+        {
+            var counts = result.ByMediaType[collection.MediaType.ToString()];
+            seenCollections.Add(collection.Id);
+
+            if (existingCollections.TryGetValue(collection.Id, out var current))
+            {
+                collection.SeededAtUtc = current.SeededAtUtc;
+                var entry = db.Entry(current);
+                entry.CurrentValues.SetValues(collection);
+                if (entry.State == EntityState.Modified)
+                    counts.CollectionsUpdated++;
+                current.SeededAtUtc = now;
+            }
+            else
+            {
+                collection.SeededAtUtc = now;
+                db.Collections.Add(collection);
+                counts.CollectionsAdded++;
+            }
+
+            foreach (var file in files)
+            {
+                seenFiles.Add(file.Id);
+
+                if (!existingFiles.TryGetValue(file.Id, out var currentFile))
                 {
-                    Id            = $"file-{houseName}-{Guid.NewGuid().ToString("N")[..8]}",
-                    DatasetId     = DatasetId(houseName),
-                    Name          = fakeName,
-                    ContentUrl    = fakePath,
-                    ContentSize   = Random.Shared.Next(300_000, 5_000_001),
-                    Sha256        = DeterministicHash(fakePath),
-                    Author        = RandomAuthor(),
-                    DatePublished = date.ToString("O"),
-                    DateModified  = date.ToString("O"),
-                    WordCount     = charCount / 5,
-                    CharCount     = charCount,
-                    TokenCount    = charCount / 4,
-                    NumberOfPages = Random.Shared.Next(1, 5),
-                    Keywords      = [.. keywords.Select(kw => new Keyword { Value = kw })],
-                    Themes        = [.. themes.Select(th => new Theme   { Value = th })],
-                });
-                filesInserted++;
+                    db.CollectionFiles.Add(file);
+                    counts.FilesAdded++;
+                    continue;
+                }
+
+                var entry = db.Entry(currentFile);
+                entry.CurrentValues.SetValues(file);
+                var changed = entry.State == EntityState.Modified;
+                changed |= CatalogTagPublisher.SyncTags(db, currentFile.Keywords, file.Keywords.Select(k => k.Value), k => k.Value, v => new Keyword { Value = v });
+                changed |= CatalogTagPublisher.SyncTags(db, currentFile.Themes, file.Themes.Select(t => t.Value), t => t.Value, v => new Theme { Value = v });
+                if (changed)
+                    counts.FilesUpdated++;
             }
         }
 
-        await db.SaveChangesAsync(ct);
-        return new SeedResult
+        // Pick up reassigned CollectionIds before deleting, so removing an old collection
+        // does not cascade to files that moved to a new one.
+        db.ChangeTracker.DetectChanges();
+
+        foreach (var (id, file) in existingFiles)
         {
-            DatasetsCreated = datasetsCreated,
-            FilesInserted   = filesInserted,
-            FilesSkipped    = 0,
-            Message         = $"Dummy records generated: {datasetsCreated} dataset(s) created, " +
-                              $"{filesInserted} file(s) inserted.",
-        };
+            if (seenFiles.Contains(id))
+                continue;
+            db.CollectionFiles.Remove(file);
+            result.ByMediaType[previousMediaType[file.CollectionId].ToString()].FilesDeleted++;
+        }
+
+        foreach (var (id, collection) in existingCollections)
+        {
+            if (seenCollections.Contains(id))
+                continue;
+            db.Collections.Remove(collection);
+            result.ByMediaType[previousMediaType[id].ToString()].CollectionsDeleted++;
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        foreach (var counts in result.ByMediaType.Values)
+        {
+            result.Totals.CollectionsAdded   += counts.CollectionsAdded;
+            result.Totals.CollectionsUpdated += counts.CollectionsUpdated;
+            result.Totals.CollectionsDeleted += counts.CollectionsDeleted;
+            result.Totals.FilesAdded         += counts.FilesAdded;
+            result.Totals.FilesUpdated       += counts.FilesUpdated;
+            result.Totals.FilesDeleted       += counts.FilesDeleted;
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private static string DatasetId(string houseName) =>
-        $"DDP-{houseName.ToUpperInvariant().Replace(' ', '-')}";
-
-    /// <returns><c>true</c> when a new Dataset row was added, <c>false</c> when it already existed.</returns>
-    private async Task<bool> EnsureDatasetAsync(string houseName, CancellationToken ct)
-    {
-        var id = DatasetId(houseName);
-        if (await db.Datasets.FindAsync([id], ct) is not null)
-            return false;
-
-        db.Datasets.Add(new Dataset
-        {
-            Id            = id,
-            Name          = houseName,
-            DatePublished = DateTime.UtcNow.ToString("O"),
-            DateModified  = DateTime.UtcNow.ToString("O"),
-        });
-        return true;
-    }
 
     private async Task<string> ComputeSha256Async(string key, CancellationToken ct)
     {
@@ -359,127 +477,8 @@ public class SeedService(ApplicationDbContext db, IFileStorageService storage)
         }
         catch
         {
-            // Fall back to deterministic hash if the file cannot be opened
-            return DeterministicHash(key);
+            // Fall back to a deterministic hash of the key if the file cannot be opened
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
         }
-    }
-
-    private static string DeterministicHash(string input)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input));
-        return Convert.ToHexString(bytes).ToLowerInvariant();
-    }
-
-    // ── Tagger integration ─────────────────────────────────────────────────────
-
-    // Only use tags that have been submitted to or approved by a supervisor
-    private static readonly FileTaggingStatus[] ReadyStatuses =
-        [FileTaggingStatus.SubmittedToSupervisor, FileTaggingStatus.ApprovedBySupervisor];
-
-    private async Task<(Dictionary<string, FileMetadata> Lookup, string? Error)> LoadTaggerLookupAsync(
-        List<string> contentUrls, CancellationToken ct)
-    {
-        if (contentUrls.Count == 0) return ([], null);
-
-        // The tagger may store BlobNames with or without a leading "./".
-        // Query for both forms so either convention matches.
-        var stripped = contentUrls
-            .Select(u => u.StartsWith("./") ? u[2..] : u)
-            .ToList();
-
-        try
-        {
-            var metadata = await db.FileMetadata
-                .Include(m => m.Tags)
-                .Where(m => m.BlobName != null
-                            && (contentUrls.Contains(m.BlobName) || stripped.Contains(m.BlobName))
-                            && ReadyStatuses.Contains(m.Status))
-                .ToListAsync(ct);
-
-            // Normalise keys to "./"-prefixed form to match contentUrl in the seed loop
-            var lookup = metadata
-                .Where(m => m.BlobName != null)
-                .ToDictionary(
-                    m => m.BlobName!.StartsWith("./") ? m.BlobName! : $"./{ m.BlobName!}",
-                    m => m);
-
-            return (lookup, null);
-        }
-        catch (Exception ex)
-        {
-            return ([], ex.Message);
-        }
-    }
-
-    /// <summary>
-    /// Extracts themes, keywords, author, and title from the tagger database entry
-    /// for the given file. Returns empty/null values when no approved tagger entry exists.
-    /// </summary>
-    private static (string[] themes, string[] keywords, string? author, string? title) ExtractTaggerData(
-        string contentUrl,
-        Dictionary<string, FileMetadata> taggerLookup)
-    {
-        if (!taggerLookup.TryGetValue(contentUrl, out var meta))
-            return ([], [], null, null);
-
-        string[] themes   = [];
-        string[] keywords = [];
-        string?  author   = null;
-        string?  title    = null;
-
-        foreach (var tag in meta.Tags)
-        {
-            switch (tag.TagKey)
-            {
-                case "Theme":
-                    themes = tag.TagValue
-                        .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                        .Select(t => t.Contains('>') ? t[..t.IndexOf('>')].Trim() : t.Trim())
-                        .Where(t => !string.IsNullOrEmpty(t))
-                        .Distinct()
-                        .ToArray();
-                    break;
-                case "Keywords":
-                    keywords = tag.TagValue
-                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                        .ToArray();
-                    break;
-                case "Author":
-                    author = tag.TagValue;
-                    break;
-                case "Title":
-                    title = tag.TagValue;
-                    break;
-            }
-        }
-
-        return (themes, keywords, author, title);
-    }
-
-    private static string[] PickRandomThemes()
-    {
-        var k = Random.Shared.Next(1, 4); // 1–3 themes
-        return [.. Themes.OrderBy(_ => Random.Shared.Next()).Take(k)];
-    }
-
-    private static string[] PickRandomKeywords(string[] selectedThemes)
-    {
-        var pool = selectedThemes
-            .SelectMany(t => KeywordPools.GetValueOrDefault(t, []))
-            .Distinct()
-            .ToArray();
-
-        var k = Math.Max(3, Math.Min(6, pool.Length));
-        return [.. pool.OrderBy(_ => Random.Shared.Next()).Take(k)];
-    }
-
-    private static string RandomAuthor() =>
-        SampleAuthors[Random.Shared.Next(SampleAuthors.Length)];
-
-    private static DateTime RandomDateInYear(int year)
-    {
-        var start = new DateTime(year, 1, 1);
-        var span  = new DateTime(year, 12, 31) - start;
-        return start.AddDays(Random.Shared.Next(0, span.Days + 1));
     }
 }

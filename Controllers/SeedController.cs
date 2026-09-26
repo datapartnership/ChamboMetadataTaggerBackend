@@ -10,9 +10,7 @@ using Npgsql;
 namespace MetadataTagging.Controllers;
 
 /// <summary>
-/// Populates the database with file metadata by scanning the configured storage
-/// (local filesystem or S3 bucket) or by generating synthetic dummy records.
-/// Mirrors the functionality of <c>seed_metadata.py</c>.
+/// Rebuilds the collection catalog from catalog storage, and resets the catalog tables.
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -20,75 +18,36 @@ namespace MetadataTagging.Controllers;
 [Authorize(Policy = "Write")]
 public class SeedController(
     SeedService seedService,
-    SoundSeedService soundSeedService,
     ApplicationDbContext db,
     ILogger<SeedController> logger) : ControllerBase
 {
-    /// <summary>Scan storage (or generate dummy data) and seed the database.</summary>
+    /// <summary>Scan catalog storage and sync the collection catalog.</summary>
     /// <remarks>
-    /// Two modes are supported:
+    /// Catalog storage is laid out as <c>Provider/CollectionFolder/...</c>. Every collection folder
+    /// becomes a collection, whose media type is inferred from its contents:
     ///
-    /// **Scan** (default) — walks the configured storage root.  Each top-level
-    /// directory becomes a Dataset; all PDF/TXT files beneath it are inserted as
-    /// FileRecords with random UNBIS themes and keywords.  Already-present records
-    /// (matched by <c>ContentUrl</c>) are skipped, so the operation is idempotent.
+    /// - **Audio / Video** — the folder contains a <c>*_metadata.jsonld</c> (Croissant) describing the
+    ///   collection, its media files, and their transcriptions (which may be in subfolders).
+    /// - **Text** — no metadata file; PDF/TXT/MD files are cataloged and enriched with approved tagger tags.
     ///
-    /// **Dummy** — generates synthetic records without touching the file storage.
-    /// Useful for local development when no real files exist.
-    ///
-    /// **Authentication**: supply your API key in the `X-Api-Key` header.
-    ///
-    /// ### Scan example
-    ///     POST /api/seed
-    ///     { "mode": "Scan" }
-    ///
-    /// ### Dummy example
-    ///     POST /api/seed
-    ///     { "mode": "Dummy", "dummyHouses": "MediaHouseA,MediaHouseB", "dummyFilesPerHouse": 20 }
-    /// </remarks>
-    /// <param name="request">Seed options</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <response code="200">Seed completed — returns a summary</response>
-    /// <response code="400">Invalid request body</response>
-    /// <response code="401">Missing API key</response>
-    /// <response code="403">Invalid API key</response>
-    [HttpPost]
-    [ProducesResponseType(typeof(SeedResult), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(AuthErrorResponse), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(AuthErrorResponse), StatusCodes.Status403Forbidden)]
-    public async Task<IActionResult> Seed([FromBody] SeedRequest request, CancellationToken ct)
-    {
-        if (request.DummyFilesPerHouse is < 1 or > 10_000)
-            return BadRequest(new { error = "dummyFilesPerHouse must be between 1 and 10 000." });
-
-        var result = await seedService.SeedAsync(request, ct);
-        return Ok(result);
-    }
-
-    /// <summary>
-    /// Scan the sound storage bucket for <c>*_metadata.jsonld</c> files and seed the database
-    /// with <see cref="SoundSeedResult"/> entities.
-    /// </summary>
-    /// <remarks>
-    /// Walks every <c>*_metadata.jsonld</c> file found in the configured sound bucket/container,
-    /// parses the Croissant JSON-LD, and upserts <c>SoundDataset</c> + <c>SoundFileRecord</c> rows.
-    /// Already-present records (matched by <c>ContentUrl</c>) are skipped — the operation is idempotent.
+    /// The run is a full sync: new collections/files are added, changed ones updated, and ones no
+    /// longer in storage deleted. Skipped or inconsistent content is reported in <c>warnings</c>.
     ///
     /// ### Example
-    ///     POST /api/seed/sound
+    ///     POST /api/seed
     /// </remarks>
     /// <param name="ct">Cancellation token</param>
-    /// <response code="200">Sound seed completed — returns a summary</response>
+    /// <response code="200">Seed completed — returns a summary</response>
     /// <response code="401">Unauthenticated</response>
     /// <response code="403">Insufficient permissions</response>
-    [HttpPost("sound")]
-    [ProducesResponseType(typeof(SoundSeedResult), StatusCodes.Status200OK)]
+    [HttpPost]
+    [ProducesResponseType(typeof(SeedResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(AuthErrorResponse), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(AuthErrorResponse), StatusCodes.Status403Forbidden)]
-    public async Task<IActionResult> SeedSound(CancellationToken ct)
+    public async Task<IActionResult> Seed(CancellationToken ct)
     {
-        var result = await soundSeedService.SeedAsync(ct);
+        var result = await seedService.SeedAsync(ct);
+        logger.LogInformation("Catalog seed by {User}: {Message}", User?.Identity?.Name ?? "unknown", result.Message);
         return Ok(result);
     }
 
@@ -127,27 +86,21 @@ public class SeedController(
             // Delete children first to satisfy FK constraints on all providers.
             KeywordsDeleted = await DeleteTableRowsAsync(["Keywords", "keywords"], ct),
             ThemesDeleted = await DeleteTableRowsAsync(["Themes", "themes"], ct),
-            FilesDeleted = await DeleteTableRowsAsync(["FileRecords", "filerecords", "file_records"], ct),
-            DatasetsDeleted = await DeleteTableRowsAsync(["Datasets", "datasets"], ct),
-
-            SoundFilesDeleted = await DeleteTableRowsAsync(["SoundFileRecords", "soundfilerecords", "sound_file_records"], ct),
-            SoundDatasetsDeleted = await DeleteTableRowsAsync(["SoundDatasets", "sounddatasets", "sound_datasets"], ct)
+            FilesDeleted = await DeleteTableRowsAsync(["CollectionFiles", "collectionfiles"], ct),
+            CollectionsDeleted = await DeleteTableRowsAsync(["Collections", "collections"], ct),
         };
 
         await tx.CommitAsync(ct);
 
         result.Message =
-            $"Reset complete. Deleted {result.DatasetsDeleted} datasets, {result.FilesDeleted} files, " +
-            $"{result.KeywordsDeleted} keywords, {result.ThemesDeleted} themes, " +
-            $"{result.SoundDatasetsDeleted} sound datasets, and {result.SoundFilesDeleted} sound files.";
+            $"Reset complete. Deleted {result.CollectionsDeleted} collections, {result.FilesDeleted} files, " +
+            $"{result.KeywordsDeleted} keywords, and {result.ThemesDeleted} themes.";
 
         logger.LogWarning(
-            "Database reset performed by {User}. Deleted datasets={DatasetsDeleted}, files={FilesDeleted}, soundDatasets={SoundDatasetsDeleted}, soundFiles={SoundFilesDeleted}.",
+            "Database reset performed by {User}. Deleted collections={CollectionsDeleted}, files={FilesDeleted}.",
             User?.Identity?.Name ?? "unknown",
-            result.DatasetsDeleted,
-            result.FilesDeleted,
-            result.SoundDatasetsDeleted,
-            result.SoundFilesDeleted);
+            result.CollectionsDeleted,
+            result.FilesDeleted);
 
         return Ok(result);
     }

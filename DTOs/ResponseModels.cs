@@ -221,49 +221,48 @@ public class KeywordThemeSummary
     public int fileCount { get; set; }
 }
 
-/// <summary>Summary of text (Nation newspaper) pipeline.</summary>
-public class TextPipelineSummary
+/// <summary>Collection and file counts for one media type.</summary>
+public class MediaTypeSummary
 {
-    /// <example>5</example>
-    public int datasetCount { get; set; }
+    /// <example>Audio</example>
+    public string mediaType { get; set; } = "";
 
-    /// <example>1542</example>
-    public int fileCount { get; set; }
+    /// <example>12</example>
+    public int collectionCount { get; set; }
 
-    /// <example>1200</example>
-    public int taggedFileCount { get; set; }
-}
-
-/// <summary>Summary of sound (audio) pipeline.</summary>
-public class SoundPipelineSummary
-{
-    /// <example>2</example>
-    public int datasetCount { get; set; }
-
+    /// <summary>Primary (non-transcription) files.</summary>
     /// <example>500</example>
     public int fileCount { get; set; }
 
+    /// <example>120</example>
+    public int transcriptionCount { get; set; }
+
+    /// <summary>Files with at least one keyword or theme.</summary>
     /// <example>0</example>
     public int taggedFileCount { get; set; }
+
+    /// <example>36000</example>
+    public double totalDurationSeconds { get; set; }
 }
 
-/// <summary>Aggregated summary of all datasets and files.</summary>
-public class DatasetsSummaryResponse
+/// <summary>Aggregated summary of all collections and files.</summary>
+public class CollectionsSummaryResponse
 {
     /// <example>2026-03-02T12:00:00Z</example>
     public DateTime generatedAt { get; set; }
 
     /// <example>7</example>
-    public int totalDatasets { get; set; }
+    public int totalCollections { get; set; }
 
+    /// <summary>Primary (non-transcription) files across all media types.</summary>
     /// <example>2042</example>
     public int totalFiles { get; set; }
 
     /// <example>1200</example>
     public int totalTaggedFiles { get; set; }
 
-    /// <summary>Top publishers/creators by file count (sorted descending)</summary>
-    public List<PublisherSummary> topPublishers { get; set; } = [];
+    /// <summary>Top providers by file count (sorted descending)</summary>
+    public List<PublisherSummary> topProviders { get; set; } = [];
 
     /// <summary>Top 20 keywords (sorted by count descending)</summary>
     public List<KeywordThemeSummary> topKeywords { get; set; } = [];
@@ -271,9 +270,6 @@ public class DatasetsSummaryResponse
     /// <summary>Top 20 themes (sorted by count descending)</summary>
     public List<KeywordThemeSummary> topThemes { get; set; } = [];
 
-    /// <summary>Breakdown of text pipeline metrics</summary>
-    public TextPipelineSummary textSummary { get; set; } = new();
-
-    /// <summary>Breakdown of sound pipeline metrics</summary>
-    public SoundPipelineSummary soundSummary { get; set; } = new();
+    /// <summary>Breakdown per media type (Text, Audio, Video)</summary>
+    public List<MediaTypeSummary> byMediaType { get; set; } = [];
 }

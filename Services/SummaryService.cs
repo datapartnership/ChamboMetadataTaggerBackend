@@ -1,37 +1,55 @@
 using Microsoft.EntityFrameworkCore;
 using MetadataTagging.Data;
 using MetadataTagging.DTOs;
+using MetadataTagging.Models;
 
 namespace MetadataTagging.Services;
 
 /// <summary>
-/// Provides aggregated summaries of datasets, files, keywords, and themes
-/// across both text and sound pipelines.
+/// Provides aggregated summaries of collections, files, keywords, and themes
+/// across all media types.
 /// </summary>
 public class SummaryService(ApplicationDbContext db)
 {
-    /// <summary>
-    /// Gets a summary of all datasets, including file counts, tagged file counts,
-    /// top publishers, keywords, and themes.
-    /// </summary>
-    /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Aggregated datasets summary</returns>
-    public async Task<DatasetsSummaryResponse> GetDatasetsSummaryAsync(CancellationToken cancellationToken = default)
+    public async Task<CollectionsSummaryResponse> GetSummaryAsync(CancellationToken cancellationToken = default)
     {
-        // Text pipeline aggregations
-        var textDatasetCount = await db.Datasets.CountAsync(cancellationToken);
-        var textFileCount = await db.FileRecords.CountAsync(cancellationToken);
-        var textTaggedFileCount = await db.FileRecords
-            .Where(f => f.Keywords.Any() || f.Themes.Any())
-            .CountAsync(cancellationToken);
+        var collections = await db.Collections
+            .GroupBy(c => c.MediaType)
+            .Select(g => new
+            {
+                MediaType = g.Key,
+                Count     = g.Count(),
+                Files     = g.Sum(c => c.FileCount),
+                Duration  = g.Sum(c => c.TotalDurationSeconds ?? 0),
+            })
+            .ToListAsync(cancellationToken);
 
-        // Sound pipeline aggregations
-        var soundDatasetCount = await db.SoundDatasets.CountAsync(cancellationToken);
-        var soundFileCount = await db.SoundFileRecords.CountAsync(cancellationToken);
-        // Sound files are not tagged, so taggedFileCount is 0
-        var soundTaggedFileCount = 0;
+        var files = await db.CollectionFiles
+            .GroupBy(f => new { f.Collection!.MediaType, f.Kind })
+            .Select(g => new
+            {
+                g.Key.MediaType,
+                g.Key.Kind,
+                Tagged = g.Count(f => f.Keywords.Any() || f.Themes.Any()),
+                Count  = g.Count(),
+            })
+            .ToListAsync(cancellationToken);
 
-        // Top keywords (top 20, sorted by count descending)
+        var byMediaType = Enum.GetValues<MediaType>().Select(mediaType =>
+        {
+            var c = collections.FirstOrDefault(x => x.MediaType == mediaType);
+            var f = files.Where(x => x.MediaType == mediaType).ToList();
+            return new MediaTypeSummary
+            {
+                mediaType            = mediaType.ToString(),
+                collectionCount      = c?.Count ?? 0,
+                fileCount            = c?.Files ?? 0,
+                transcriptionCount   = f.Where(x => x.Kind == FileKind.Transcription).Sum(x => x.Count),
+                taggedFileCount      = f.Sum(x => x.Tagged),
+                totalDurationSeconds = c?.Duration ?? 0,
+            };
+        }).ToList();
+
         var topKeywords = await db.Keywords
             .GroupBy(k => k.Value)
             .Select(g => new KeywordThemeSummary
@@ -44,7 +62,6 @@ public class SummaryService(ApplicationDbContext db)
             .Take(20)
             .ToListAsync(cancellationToken);
 
-        // Top themes (top 20, sorted by count descending)
         var topThemes = await db.Themes
             .GroupBy(t => t.Value)
             .Select(g => new KeywordThemeSummary
@@ -57,67 +74,23 @@ public class SummaryService(ApplicationDbContext db)
             .Take(20)
             .ToListAsync(cancellationToken);
 
-        // Top publishers/creators from text datasets (top 10 by file count)
-        var textPublishers = await db.Datasets
-            .GroupBy(d => d.Publisher ?? d.Creator ?? "Unknown")
-            .Select(g => new PublisherSummary
-            {
-                name = g.Key,
-                fileCount = g.Sum(d => d.Files.Count)
-            })
+        var topProviders = await db.Collections
+            .GroupBy(c => c.Provider)
+            .Select(g => new PublisherSummary { name = g.Key, fileCount = g.Sum(c => c.FileCount) })
             .OrderByDescending(p => p.fileCount)
             .Take(10)
             .ToListAsync(cancellationToken);
 
-        // Top creators from sound datasets (top 10 by file count)
-        var soundCreators = await db.SoundDatasets
-            .Where(sd => sd.CreatorName != null)
-            .GroupBy(sd => sd.CreatorName ?? "Unknown")
-            .Select(g => new PublisherSummary
-            {
-                name = g.Key,
-                fileCount = g.Sum(d => d.Files.Count)
-            })
-            .OrderByDescending(p => p.fileCount)
-            .Take(10)
-            .ToListAsync(cancellationToken);
-
-        // Combine and merge publishers from both pipelines, deduplicate by name, and take top 10
-        var allPublishers = textPublishers.Concat(soundCreators)
-            .GroupBy(p => p.name)
-            .Select(g => new PublisherSummary
-            {
-                name = g.Key,
-                fileCount = g.Sum(p => p.fileCount)
-            })
-            .OrderByDescending(p => p.fileCount)
-            .Take(10)
-            .ToList();
-
-        // Build response
-        var response = new DatasetsSummaryResponse
+        return new CollectionsSummaryResponse
         {
-            generatedAt = DateTime.UtcNow,
-            totalDatasets = textDatasetCount + soundDatasetCount,
-            totalFiles = textFileCount + soundFileCount,
-            totalTaggedFiles = textTaggedFileCount + soundTaggedFileCount,
-            topPublishers = allPublishers,
-            topKeywords = topKeywords,
-            topThemes = topThemes,
-            textSummary = new TextPipelineSummary
-            {
-                datasetCount = textDatasetCount,
-                fileCount = textFileCount,
-                taggedFileCount = textTaggedFileCount
-            },
-            soundSummary = new SoundPipelineSummary
-            {
-                datasetCount = soundDatasetCount,
-                fileCount = soundFileCount,
-                taggedFileCount = soundTaggedFileCount
-            }
+            generatedAt      = DateTime.UtcNow,
+            totalCollections = byMediaType.Sum(m => m.collectionCount),
+            totalFiles       = byMediaType.Sum(m => m.fileCount),
+            totalTaggedFiles = byMediaType.Sum(m => m.taggedFileCount),
+            topProviders     = topProviders,
+            topKeywords      = topKeywords,
+            topThemes        = topThemes,
+            byMediaType      = byMediaType,
         };
-
-        return response;
     }
 }
