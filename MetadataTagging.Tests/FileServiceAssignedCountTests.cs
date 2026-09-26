@@ -23,7 +23,7 @@ public class FileServiceAssignedCountTests
         await context.Database.EnsureCreatedAsync();
         SeedFiles(context);
 
-        var service = new FileService(context, new StubStorageService());
+        var service = new FileService(context, new StubStorageService(), new CatalogTagPublisher(context));
         var pagination = new PaginationParams { Page = 1, PageSize = 100 };
 
         var assigned = await service.GetAssignedFilesAsync(pagination);
@@ -61,28 +61,21 @@ public class FileServiceAssignedCountTests
         UploadedAt = DateTime.UtcNow
     };
 
-    private sealed class StubStorageService : IStorageService
+    private sealed class StubStorageService : IFileStorageService
     {
-        public Task<IEnumerable<BlobFileDto>> ListBlobsAsync(string? prefix = null) =>
-            Task.FromResult(Enumerable.Empty<BlobFileDto>());
-
-        public Task<string> GetBlobUrlAsync(string blobName) =>
-            Task.FromResult(string.Empty);
-
-        public Task<string> GetBlobSasUrlAsync(string blobName, int expiryMinutes = 60) =>
-            Task.FromResult(string.Empty);
-
-        public Task<bool> BlobExistsAsync(string blobName) =>
-            Task.FromResult(false);
-
-        public Task<(Stream Content, string ContentType, long ContentLength)> DownloadBlobAsync(string blobName) =>
+        public Task<Stream> OpenReadAsync(string key, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<(Stream Content, string ContentType, long ContentLength, long TotalSize)> DownloadBlobRangeAsync(
-            string blobName, long offset, long? length) =>
+        public Task<Stream> OpenReadRangeAsync(string key, long offset, long length, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<long> GetBlobSizeAsync(string blobName) =>
-            Task.FromResult(0L);
+        public Task<IReadOnlyList<StorageFileEntry>> ListFilesAsync(string prefix = "", CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<StorageFileEntry>>([]);
+
+        public Task<StorageFileEntry?> GetEntryAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<StorageFileEntry?>(null);
+
+        public Task<string?> GetReadUrlAsync(string key, TimeSpan expiry, CancellationToken ct = default) =>
+            Task.FromResult<string?>(null);
     }
 }

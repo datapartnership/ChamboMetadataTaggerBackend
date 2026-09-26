@@ -1,409 +1,236 @@
 using Microsoft.EntityFrameworkCore;
 using MetadataTagging.Data;
 using MetadataTagging.DTOs;
+using MetadataTagging.Models;
 
 namespace MetadataTagging.Services;
 
 /// <summary>
-/// Provides publicly-accessible catalog queries used by the CKAN-style catalog UI.
+/// Provides publicly-accessible collection catalog queries used by the catalog browser UI.
 /// All methods return plain DTO objects; no authentication is required by callers.
 /// </summary>
 public class CatalogService(ApplicationDbContext db)
 {
-    // ── Text datasets ─────────────────────────────────────────────────────────
-
-    public async Task<CatalogPagedResult<CatalogDatasetListItem>> ListDatasetsAsync(
-        CatalogDatasetQueryParams p, CancellationToken ct = default)
+    public async Task<CatalogPagedResult<CollectionCatalogListItem>> ListCollectionsAsync(
+        CollectionCatalogQueryParams p, CancellationToken ct = default)
     {
-        p.Page     = Math.Max(1, p.Page);
-        p.PageSize = Math.Clamp(p.PageSize, 1, 50);
-
-        var query = db.Datasets.Include(d => d.Files)
-                               .ThenInclude(f => f.Keywords)
-                               .Include(d => d.Files)
-                               .ThenInclude(f => f.Themes)
-                               .AsQueryable();
+        var query = db.Collections.AsNoTracking().AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(p.Q))
         {
             var q = p.Q.ToLower();
-            query = query.Where(d =>
-                d.Name.ToLower().Contains(q) ||
-                (d.Publisher != null && d.Publisher.ToLower().Contains(q)) ||
-                (d.Creator   != null && d.Creator.ToLower().Contains(q)));
+            query = query.Where(c =>
+                c.Name.ToLower().Contains(q) ||
+                c.Provider.ToLower().Contains(q) ||
+                (c.Description != null && c.Description.ToLower().Contains(q)));
         }
 
-        if (!string.IsNullOrWhiteSpace(p.Keyword))
-        {
-            var kw = p.Keyword.ToLower();
-            query = query.Where(d => d.Files.Any(f =>
-                f.Keywords.Any(k => k.Value.ToLower().Contains(kw))));
-        }
-
-        if (!string.IsNullOrWhiteSpace(p.Theme))
-        {
-            var th = p.Theme.ToLower();
-            query = query.Where(d => d.Files.Any(f =>
-                f.Themes.Any(t => t.Value.ToLower().Contains(th))));
-        }
-
-        if (!string.IsNullOrWhiteSpace(p.Year))
-        {
-            query = query.Where(d => d.Id.EndsWith(p.Year) ||
-                (d.DatePublished != null && d.DatePublished.StartsWith(p.Year)) ||
-                (d.TemporalCoverage != null && d.TemporalCoverage.Contains(p.Year)));
-        }
-
-        var total = await query.CountAsync(ct);
-
-        var datasets = await query
-            .OrderByDescending(d => d.DatePublished ?? d.Id)
-            .Skip((p.Page - 1) * p.PageSize)
-            .Take(p.PageSize)
-            .ToListAsync(ct);
-
-        var items = datasets.Select(d => new CatalogDatasetListItem
-        {
-            id               = d.Id,
-            name             = d.Name,
-            publisher        = d.Publisher,
-            creator          = d.Creator,
-            datePublished    = d.DatePublished,
-            temporalCoverage = d.TemporalCoverage,
-            spatialCoverage  = d.SpatialCoverage,
-            languageCode     = d.LanguageCode,
-            license          = d.License,
-            fileCount        = d.Files.Count,
-            topKeywords      = d.Files.SelectMany(f => f.Keywords.Select(k => k.Value))
-                                      .GroupBy(v => v).OrderByDescending(g => g.Count())
-                                      .Take(5).Select(g => g.Key).ToList(),
-            topThemes        = d.Files.SelectMany(f => f.Themes.Select(t => t.Value))
-                                      .GroupBy(v => v).OrderByDescending(g => g.Count())
-                                      .Take(5).Select(g => g.Key).ToList()
-        }).ToList();
-
-        return new CatalogPagedResult<CatalogDatasetListItem>
-        {
-            page       = p.Page,
-            pageSize   = p.PageSize,
-            totalCount = total,
-            totalPages = (int)Math.Ceiling(total / (double)p.PageSize),
-            results    = items
-        };
-    }
-
-    public async Task<CatalogDatasetDetail?> GetDatasetAsync(string id, CancellationToken ct = default)
-    {
-        var dataset = await db.Datasets
-            .Include(d => d.Files)
-            .ThenInclude(f => f.Keywords)
-            .Include(d => d.Files)
-            .ThenInclude(f => f.Themes)
-            .FirstOrDefaultAsync(d => d.Id == id, ct);
-
-        if (dataset is null) return null;
-
-        return new CatalogDatasetDetail
-        {
-            id               = dataset.Id,
-            name             = dataset.Name,
-            publisher        = dataset.Publisher,
-            creator          = dataset.Creator,
-            datePublished    = dataset.DatePublished,
-            dateModified     = dataset.DateModified,
-            temporalCoverage = dataset.TemporalCoverage,
-            spatialCoverage  = dataset.SpatialCoverage,
-            languageCode     = dataset.LanguageCode,
-            license          = dataset.License,
-            version          = dataset.Version,
-            totalFiles       = dataset.Files.Count,
-            files            = [],
-            allKeywords      = dataset.Files.SelectMany(f => f.Keywords.Select(k => k.Value)).Distinct().OrderBy(v => v).ToList(),
-            allThemes        = dataset.Files.SelectMany(f => f.Themes.Select(t => t.Value)).Distinct().OrderBy(v => v).ToList()
-        };
-    }
-
-    public async Task<CatalogPagedResult<CatalogFileListItem>> ListFilesAsync(
-        CatalogFileQueryParams p, CancellationToken ct = default)
-    {
-        p.Page     = Math.Max(1, p.Page);
-        p.PageSize = Math.Clamp(p.PageSize, 1, 50);
-
-        var query = db.FileRecords
-            .Include(f => f.Dataset)
-            .Include(f => f.Keywords)
-            .Include(f => f.Themes)
-            .AsQueryable();
-
-        if (!string.IsNullOrWhiteSpace(p.Q))
-        {
-            var q = p.Q.Trim();
-            var qLower = q.ToLower();
-            query = query.Where(f =>
-                f.Name.ToLower().Contains(qLower) ||
-                (f.Author != null && f.Author.ToLower().Contains(qLower)));
-        }
-
-        if (!string.IsNullOrWhiteSpace(p.Keyword))
-        {
-            var kw = p.Keyword.Trim();
-            var kwLower = kw.ToLower();
-            query = query.Where(f => f.Keywords.Any(k => k.Value.ToLower() == kwLower));
-        }
-
-        if (!string.IsNullOrWhiteSpace(p.Theme))
-        {
-            var th = p.Theme.Trim();
-            var thLower = th.ToLower();
-            query = query.Where(f => f.Themes.Any(t => t.Value.ToLower() == thLower));
-        }
-
-        if (!string.IsNullOrWhiteSpace(p.Year))
-        {
-            var year = p.Year.Trim();
-            query = query.Where(f => f.DatePublished != null && f.DatePublished.StartsWith(year));
-        }
-
-        if (!string.IsNullOrWhiteSpace(p.Author))
-        {
-            var author = p.Author.Trim();
-            var authorLower = author.ToLower();
-            query = query.Where(f => f.Author != null && f.Author.ToLower().Contains(authorLower));
-        }
-
-        if (!string.IsNullOrWhiteSpace(p.DatasetId))
-        {
-            query = query.Where(f => f.DatasetId == p.DatasetId);
-        }
-
-        var total = await query.CountAsync(ct);
-
-        var files = await query
-            .OrderByDescending(f => f.DatePublished ?? f.Id)
-            .Skip((p.Page - 1) * p.PageSize)
-            .Take(p.PageSize)
-            .ToListAsync(ct);
-
-        var items = files.Select(f => new CatalogFileListItem
-        {
-            id            = f.Id,
-            datasetId     = f.DatasetId,
-            datasetName   = f.Dataset?.Name ?? "",
-            name          = f.Name,
-            author        = f.Author,
-            datePublished = f.DatePublished,
-            encodingFormat = f.EncodingFormat,
-            contentSize   = f.ContentSize,
-            wordCount     = f.WordCount,
-            charCount     = f.CharCount,
-            tokenCount    = f.TokenCount,
-            numberOfPages = f.NumberOfPages,
-            subject       = f.Subject,
-            discourseType = f.DiscourseType,
-            keywords      = f.Keywords.Select(k => k.Value).OrderBy(v => v).ToList(),
-            themes        = f.Themes.Select(t => t.Value).OrderBy(v => v).ToList()
-        }).ToList();
-
-        return new CatalogPagedResult<CatalogFileListItem>
-        {
-            page       = p.Page,
-            pageSize   = p.PageSize,
-            totalCount = total,
-            totalPages = (int)Math.Ceiling(total / (double)p.PageSize),
-            results    = items
-        };
-    }
-
-    // ── Sound datasets ────────────────────────────────────────────────────────
-
-    public async Task<CatalogPagedResult<CatalogSoundDatasetListItem>> ListSoundDatasetsAsync(
-        CatalogSoundQueryParams p, CancellationToken ct = default)
-    {
-        p.Page     = Math.Max(1, p.Page);
-        p.PageSize = Math.Clamp(p.PageSize, 1, 50);
-
-        var query = db.SoundDatasets.Include(d => d.Files).AsQueryable();
-
-        if (!string.IsNullOrWhiteSpace(p.Q))
-        {
-            var q = p.Q.ToLower();
-            query = query.Where(d =>
-                d.Name.ToLower().Contains(q) ||
-                (d.CreatorName != null && d.CreatorName.ToLower().Contains(q)) ||
-                (d.Description != null && d.Description.ToLower().Contains(q)));
-        }
+        if (TryParseEnum<MediaType>(p.MediaType, out var mediaType))
+            query = query.Where(c => c.MediaType == mediaType);
 
         if (!string.IsNullOrWhiteSpace(p.Language))
         {
             var lang = p.Language.ToLower();
-            query = query.Where(d =>
-                (d.SubjectLanguageCode != null && d.SubjectLanguageCode.ToLower().Contains(lang)) ||
-                (d.SubjectLanguageName != null && d.SubjectLanguageName.ToLower().Contains(lang)) ||
-                (d.InLanguageIdentifier != null && d.InLanguageIdentifier.ToLower().Contains(lang)) ||
-                (d.InLanguageName != null && d.InLanguageName.ToLower().Contains(lang)));
+            query = query.Where(c =>
+                (c.LanguageName != null && c.LanguageName.ToLower().Contains(lang)) ||
+                (c.LanguageCode != null && c.LanguageCode.ToLower().Contains(lang)));
         }
 
-        if (!string.IsNullOrWhiteSpace(p.Year))
+        if (!string.IsNullOrWhiteSpace(p.Provider))
         {
-            query = query.Where(d =>
-                (d.DatePublished != null && d.DatePublished.StartsWith(p.Year)) ||
-                (d.TemporalCoverage != null && d.TemporalCoverage.Contains(p.Year)));
+            var prov = p.Provider.ToLower();
+            query = query.Where(c => c.Provider.ToLower().Contains(prov));
         }
 
-        var total = await query.CountAsync(ct);
+        if (!string.IsNullOrWhiteSpace(p.Theme))
+        {
+            var theme = p.Theme.ToLower();
+            query = query.Where(c => c.Themes != null && c.Themes.ToLower().Contains(theme));
+        }
 
-        var datasets = await query
-            .OrderByDescending(d => d.DatePublished ?? d.Id)
-            .Skip((p.Page - 1) * p.PageSize)
-            .Take(p.PageSize)
+        if (p.Year.HasValue)
+        {
+            var year = p.Year.Value;
+            query = query.Where(c =>
+                (c.StartYear == null || c.StartYear <= year) &&
+                (c.EndYear == null || c.EndYear >= year));
+        }
+
+        var totalCount = await query.CountAsync(ct);
+        var pageSize = Math.Clamp(p.PageSize, 1, 50);
+        var page = Math.Max(p.Page, 1);
+
+        var collections = await query
+            .OrderBy(c => c.Name)
+            .ThenBy(c => c.Id)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .ToListAsync(ct);
 
-        var items = datasets.Select(d => new CatalogSoundDatasetListItem
+        return new CatalogPagedResult<CollectionCatalogListItem>
         {
-            id                   = d.Id,
-            name                 = d.Name,
-            creator              = d.CreatorName,
-            provider             = d.ProviderName,
-            datePublished        = d.DatePublished,
-            temporalCoverage     = d.TemporalCoverage,
-            spatialCoverage      = d.SpatialCoverage,
-            subjectLanguageCode  = d.SubjectLanguageCode,
-            subjectLanguageName  = d.SubjectLanguageName,
-            inLanguageName       = d.InLanguageName,
-            license              = d.License,
-            description          = d.Description,
-            fileCount            = d.Files.Count,
-            keywords             = string.IsNullOrWhiteSpace(d.Keywords)
-                                    ? []
-                                    : d.Keywords.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList()
-        }).ToList();
-
-        return new CatalogPagedResult<CatalogSoundDatasetListItem>
-        {
-            page       = p.Page,
-            pageSize   = p.PageSize,
-            totalCount = total,
-            totalPages = (int)Math.Ceiling(total / (double)p.PageSize),
-            results    = items
+            page       = page,
+            pageSize   = pageSize,
+            totalCount = totalCount,
+            totalPages = (int)Math.Ceiling(totalCount / (double)pageSize),
+            results    = [.. collections.Select(c => Fill(new CollectionCatalogListItem(), c))],
         };
     }
 
-    public async Task<CatalogSoundDatasetDetail?> GetSoundDatasetAsync(string id, CancellationToken ct = default)
+    public async Task<CollectionCatalogDetail?> GetCollectionAsync(string id, CancellationToken ct = default)
     {
-        var dataset = await db.SoundDatasets
-            .Include(d => d.Files)
-            .FirstOrDefaultAsync(d => d.Id == id, ct);
+        var c = await db.Collections.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (c is null) return null;
 
-        if (dataset is null) return null;
+        var detail = Fill(new CollectionCatalogDetail(), c);
+        detail.description        = c.Description;
+        detail.keywords           = Split(c.Keywords);
+        detail.storagePath        = c.StoragePrefix;
+        detail.temporalCoverage   = c.TemporalCoverage;
+        detail.datePublished      = c.DatePublished;
+        detail.dateModified       = c.DateModified;
+        detail.license            = c.License;
+        detail.creator            = c.Creator;
+        detail.publisher          = c.Publisher;
+        detail.sourceOrganization = c.SourceOrganization;
+        detail.version            = c.Version;
+        detail.piiScreening       = c.PiiScreening;
+        detail.sensitiveContent   = c.SensitiveContent;
+        detail.seededAtUtc        = c.SeededAtUtc;
+        detail.transcriptionCount = await db.CollectionFiles
+            .CountAsync(f => f.CollectionId == id && f.Kind == FileKind.Transcription, ct);
+        return detail;
+    }
 
-        return new CatalogSoundDatasetDetail
+    /// <returns><c>null</c> when the collection does not exist.</returns>
+    public async Task<CatalogPagedResult<CollectionFileItem>?> ListCollectionFilesAsync(
+        string id, CollectionFileQueryParams p, CancellationToken ct = default)
+    {
+        if (!await db.Collections.AnyAsync(c => c.Id == id, ct))
+            return null;
+
+        var query = db.CollectionFiles.AsNoTracking().Where(f => f.CollectionId == id);
+
+        if (!string.IsNullOrWhiteSpace(p.Q))
         {
-            id                    = dataset.Id,
-            name                  = dataset.Name,
-            description           = dataset.Description,
-            creator               = dataset.CreatorName,
-            provider              = dataset.ProviderName,
-            sourceOrganization    = dataset.SourceOrganizationName,
-            datePublished         = dataset.DatePublished,
-            dateCreated           = dataset.DateCreated,
-            dateModified          = dataset.DateModified,
-            temporalCoverage      = dataset.TemporalCoverage,
-            spatialCoverage       = dataset.SpatialCoverage,
-            subjectLanguageCode   = dataset.SubjectLanguageCode,
-            subjectLanguageName   = dataset.SubjectLanguageName,
-            inLanguageName        = dataset.InLanguageName,
-            inLanguageIdentifier  = dataset.InLanguageIdentifier,
-            license               = dataset.License,
-            version               = dataset.Version,
-            piiScreening          = dataset.PiiScreening,
-            sensitiveContent      = dataset.SensitiveContent,
-            keywords              = string.IsNullOrWhiteSpace(dataset.Keywords)
-                                     ? []
-                                     : dataset.Keywords.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList(),
-            totalFiles            = dataset.Files.Count,
-            files = dataset.Files.Select(f => new CatalogSoundFileItem
+            var q = p.Q.ToLower();
+            query = query.Where(f =>
+                f.Name.ToLower().Contains(q) ||
+                (f.Author != null && f.Author.ToLower().Contains(q)));
+        }
+
+        if (TryParseEnum<FileKind>(p.Kind, out var kind))
+            query = query.Where(f => f.Kind == kind);
+
+        var totalCount = await query.CountAsync(ct);
+        var pageSize = Math.Clamp(p.PageSize, 1, 100);
+        var page = Math.Max(p.Page, 1);
+
+        var files = await query
+            .Include(f => f.Keywords)
+            .Include(f => f.Themes)
+            .OrderBy(f => f.Name)
+            .ThenBy(f => f.Id)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .AsSplitQuery()
+            .ToListAsync(ct);
+
+        return new CatalogPagedResult<CollectionFileItem>
+        {
+            page       = page,
+            pageSize   = pageSize,
+            totalCount = totalCount,
+            totalPages = (int)Math.Ceiling(totalCount / (double)pageSize),
+            results    = [.. files.Select(f => new CollectionFileItem
             {
-                id                   = f.Id,
-                name                 = f.Name,
-                encodingFormat       = f.EncodingFormat,
-                contentSize          = f.ContentSize,
-                duration             = f.Duration,
-                sampleRate           = f.SampleRate,
-                channels             = f.Channels,
-                bitrate              = f.Bitrate,
-                integratedLoudness   = f.IntegratedLoudness,
-                signalToNoiseRatio   = f.SignalToNoiseRatio,
-                dateModified         = f.DateModified
-            }).OrderBy(f => f.name).ToList()
+                id                  = f.Id,
+                name                = f.Name,
+                kind                = f.Kind.ToString(),
+                encodingFormat      = f.EncodingFormat,
+                contentSize         = f.ContentSize,
+                dateModified        = f.DateModified,
+                author              = f.Author,
+                datePublished       = f.DatePublished,
+                wordCount           = f.WordCount,
+                numberOfPages       = f.NumberOfPages,
+                duration            = f.Duration,
+                sampleRate          = f.SampleRate,
+                channels            = f.Channels,
+                bitrate             = f.Bitrate,
+                transcriptionFileId = f.TranscriptionFileId,
+                keywords            = [.. f.Keywords.Select(k => k.Value).Order()],
+                themes              = [.. f.Themes.Select(t => t.Value).Order()],
+            })],
         };
     }
 
-    // ── Facets ────────────────────────────────────────────────────────────────
-
-    public async Task<CatalogFacetsResponse> GetFacetsAsync(CancellationToken ct = default)
+    public async Task<CollectionCatalogFacetsResponse> GetFacetsAsync(CancellationToken ct = default)
     {
-        var totalFiles = await db.FileRecords.CountAsync(ct);
-        var taggedFiles = await db.FileRecords
-            .Where(f => f.Keywords.Any() || f.Themes.Any())
-            .CountAsync(ct);
-
-        var topKeywords = await db.Keywords
-            .GroupBy(k => k.Value)
-            .Select(g => new FacetItem { value = g.Key, count = g.Count() })
-            .OrderByDescending(f => f.count)
-            .Take(30)
+        var collections = await db.Collections
+            .AsNoTracking()
+            .Select(c => new { c.MediaType, c.Provider, c.LanguageName, c.LanguageCode, c.Themes, c.StartYear, c.EndYear })
             .ToListAsync(ct);
 
-        var topThemes = await db.Themes
-            .GroupBy(t => t.Value)
-            .Select(g => new FacetItem { value = g.Key, count = g.Count() })
-            .OrderByDescending(f => f.count)
-            .Take(20)
-            .ToListAsync(ct);
+        static List<FacetItem> Count(IEnumerable<string> values) =>
+            [.. values
+                .GroupBy(v => v, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new FacetItem { value = g.Key, count = g.Count() })
+                .OrderByDescending(f => f.count)
+                .ThenBy(f => f.value)];
 
-        var authorFacets = await db.FileRecords
-            .Where(f => !string.IsNullOrWhiteSpace(f.Author))
-            .GroupBy(f => f.Author)
-            .Select(g => new FacetItem { value = g.Key ?? "", count = g.Count() })
-            .OrderByDescending(f => f.count)
-            .Take(20)
-            .ToListAsync(ct);
-
-        var fileYears = await db.FileRecords
-            .Where(f => f.DatePublished != null)
-            .Select(f => f.DatePublished!.Substring(0, 4))
-            .Distinct()
-            .ToListAsync(ct);
-
-        var soundYears = await db.SoundDatasets
-            .Where(d => d.DatePublished != null)
-            .Select(d => d.DatePublished!.Substring(0, 4))
-            .Distinct()
-            .ToListAsync(ct);
-
-        var allYears = fileYears.Concat(soundYears).Distinct().OrderByDescending(y => y).ToList();
-
-        var soundLanguages = await db.SoundDatasets
-            .Where(d => d.SubjectLanguageCode != null)
-            .GroupBy(d => new { d.SubjectLanguageCode, d.SubjectLanguageName })
-            .Select(g => new FacetItem
+        var years = collections
+            .Where(c => c.StartYear.HasValue || c.EndYear.HasValue)
+            .SelectMany(c =>
             {
-                value = g.Key.SubjectLanguageName ?? g.Key.SubjectLanguageCode ?? "",
-                count = g.Count()
+                var start = c.StartYear ?? c.EndYear!.Value;
+                var end = Math.Max(start, c.EndYear ?? start);
+                return Enumerable.Range(start, end - start + 1);
             })
-            .OrderByDescending(f => f.count)
-            .Take(20)
-            .ToListAsync(ct);
+            .GroupBy(y => y)
+            .Select(g => new FacetItem { value = g.Key.ToString(), count = g.Count() })
+            .OrderByDescending(f => f.value)
+            .ToList();
 
-        return new CatalogFacetsResponse
+        return new CollectionCatalogFacetsResponse
         {
-            totalFiles = totalFiles,
-            taggedFiles = taggedFiles,
-            keywords = topKeywords,
-            themes = topThemes,
-            authors = authorFacets,
-            years = allYears,
-            languages = soundLanguages
+            totalCollections = collections.Count,
+            mediaTypes = Count(collections.Select(c => c.MediaType.ToString())),
+            providers  = Count(collections.Select(c => c.Provider)),
+            languages  = Count(collections
+                .Select(c => c.LanguageName ?? c.LanguageCode)
+                .OfType<string>()),
+            themes     = [.. Count(collections.SelectMany(c => Split(c.Themes))).Take(30)],
+            years      = years,
         };
     }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static T Fill<T>(T item, Collection c) where T : CollectionCatalogListItem
+    {
+        item.id           = c.Id;
+        item.name         = c.Name;
+        item.provider     = c.Provider;
+        item.mediaType    = c.MediaType.ToString();
+        item.language     = c.LanguageName ?? c.LanguageCode;
+        item.languageCode = c.LanguageCode;
+        item.formats      = Split(c.Formats);
+        item.hours        = c.TotalDurationSeconds is { } seconds ? Math.Round(seconds / 3600, 2) : null;
+        item.items        = c.FileCount;
+        item.startYear    = c.StartYear;
+        item.endYear      = c.EndYear;
+        item.themes       = Split(c.Themes);
+        return item;
+    }
+
+    private static List<string> Split(string? values) =>
+        values is null
+            ? []
+            : [.. values.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)];
+
+    internal static bool TryParseEnum<T>(string? value, out T result) where T : struct, Enum =>
+        Enum.TryParse(value?.Trim(), ignoreCase: true, out result)
+        && Enum.IsDefined(result)
+        && !int.TryParse(value, out _);
 }

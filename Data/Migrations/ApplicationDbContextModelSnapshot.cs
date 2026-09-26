@@ -22,21 +22,18 @@ namespace MetadataTagging.Data.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("MetadataTagging.Models.CollectionEntry", b =>
+            modelBuilder.Entity("MetadataTagging.Models.Collection", b =>
                 {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Availability")
+                    b.Property<string>("Id")
                         .HasColumnType("text");
 
-                    b.Property<string>("Collected")
+                    b.Property<string>("Creator")
                         .HasColumnType("text");
 
-                    b.Property<string>("Comments")
+                    b.Property<string>("DateModified")
+                        .HasColumnType("text");
+
+                    b.Property<string>("DatePublished")
                         .HasColumnType("text");
 
                     b.Property<string>("Description")
@@ -45,72 +42,110 @@ namespace MetadataTagging.Data.Migrations
                     b.Property<int?>("EndYear")
                         .HasColumnType("integer");
 
-                    b.Property<string>("Format")
-                        .HasColumnType("text");
-
-                    b.Property<double?>("Hours")
-                        .HasColumnType("double precision");
-
-                    b.Property<int?>("Items")
+                    b.Property<int>("FileCount")
                         .HasColumnType("integer");
 
-                    b.Property<string>("Language")
+                    b.Property<string>("Formats")
                         .HasColumnType("text");
+
+                    b.Property<string>("Keywords")
+                        .HasColumnType("text");
+
+                    b.Property<string>("LanguageCode")
+                        .HasColumnType("text");
+
+                    b.Property<string>("LanguageName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("License")
+                        .HasColumnType("text");
+
+                    b.Property<string>("MediaType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("Processing")
-                        .HasColumnType("text");
+                    b.Property<bool>("PiiScreening")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Publisher")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("SeededAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("SensitiveContent")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("SourceOrganization")
                         .HasColumnType("text");
 
                     b.Property<int?>("StartYear")
                         .HasColumnType("integer");
 
-                    b.Property<bool?>("StoragePathVerified")
-                        .HasColumnType("boolean");
+                    b.Property<string>("StoragePrefix")
+                        .IsRequired()
+                        .HasColumnType("text");
 
-                    b.Property<DateTime>("SyncedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("TaggedForText")
+                    b.Property<string>("TemporalCoverage")
                         .HasColumnType("text");
 
                     b.Property<string>("Themes")
                         .HasColumnType("text");
 
-                    b.Property<string>("Type")
+                    b.Property<double?>("TotalDurationSeconds")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Version")
                         .HasColumnType("text");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Availability")
-                        .HasDatabaseName("idx_collections_availability");
-
-                    b.HasIndex("Collected")
-                        .HasDatabaseName("idx_collections_collected");
-
-                    b.HasIndex("Language")
+                    b.HasIndex("LanguageCode")
                         .HasDatabaseName("idx_collections_language");
 
-                    b.HasIndex("Processing")
-                        .HasDatabaseName("idx_collections_processing");
+                    b.HasIndex("MediaType")
+                        .HasDatabaseName("idx_collections_mediatype");
 
-                    b.HasIndex("Type")
-                        .HasDatabaseName("idx_collections_type");
+                    b.HasIndex("Provider")
+                        .HasDatabaseName("idx_collections_provider");
 
                     b.ToTable("Collections");
                 });
 
-            modelBuilder.Entity("MetadataTagging.Models.Dataset", b =>
+            modelBuilder.Entity("MetadataTagging.Models.CollectionFile", b =>
                 {
                     b.Property<string>("Id")
                         .HasColumnType("text");
 
-                    b.Property<string>("Creator")
+                    b.Property<string>("Author")
+                        .HasColumnType("text");
+
+                    b.Property<double?>("Bitrate")
+                        .HasColumnType("double precision");
+
+                    b.Property<int?>("Channels")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("CharCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("CollectionId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long?>("ContentSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ContentUrl")
                         .IsRequired()
                         .HasColumnType("text");
 
@@ -120,36 +155,62 @@ namespace MetadataTagging.Data.Migrations
                     b.Property<string>("DatePublished")
                         .HasColumnType("text");
 
-                    b.Property<string>("LanguageCode")
+                    b.Property<double?>("Duration")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("EncodingFormat")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("License")
+                    b.Property<double?>("IntegratedLoudness")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Kind")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("Publisher")
-                        .IsRequired()
+                    b.Property<int?>("NumberOfPages")
+                        .HasColumnType("integer");
+
+                    b.Property<double?>("SampleRate")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Sha256")
                         .HasColumnType("text");
 
-                    b.Property<string>("SpatialCoverage")
-                        .IsRequired()
+                    b.Property<double?>("SignalToNoiseRatio")
+                        .HasColumnType("double precision");
+
+                    b.Property<int?>("TokenCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("TranscriptionFileId")
                         .HasColumnType("text");
 
-                    b.Property<string>("TemporalCoverage")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Version")
-                        .IsRequired()
-                        .HasColumnType("text");
+                    b.Property<int?>("WordCount")
+                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 
-                    b.ToTable("Datasets");
+                    b.HasIndex("Author")
+                        .HasDatabaseName("idx_collectionfiles_author");
+
+                    b.HasIndex("CollectionId")
+                        .HasDatabaseName("idx_collectionfiles_collection");
+
+                    b.HasIndex("ContentUrl")
+                        .IsUnique()
+                        .HasDatabaseName("idx_collectionfiles_contenturl");
+
+                    b.HasIndex("Kind")
+                        .HasDatabaseName("idx_collectionfiles_kind");
+
+                    b.ToTable("CollectionFiles");
                 });
 
             modelBuilder.Entity("MetadataTagging.Models.DatasetAccessApplication", b =>
@@ -318,84 +379,13 @@ namespace MetadataTagging.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BlobName");
+
                     b.HasIndex("FileName");
 
                     b.HasIndex("Status");
 
                     b.ToTable("FileMetadata");
-                });
-
-            modelBuilder.Entity("MetadataTagging.Models.FileRecord", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Author")
-                        .HasColumnType("text");
-
-                    b.Property<int?>("CharCount")
-                        .HasColumnType("integer");
-
-                    b.Property<long?>("ContentSize")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("ContentUrl")
-                        .HasColumnType("text");
-
-                    b.Property<string>("DatasetId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("DateModified")
-                        .HasColumnType("text");
-
-                    b.Property<string>("DatePublished")
-                        .HasColumnType("text");
-
-                    b.Property<string>("DiscourseType")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("EncodingFormat")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("LanguageCode")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("NumberOfPages")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Sha256")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Subject")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int?>("TokenCount")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("WordCount")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Author")
-                        .HasDatabaseName("idx_filerecords_author");
-
-                    b.HasIndex("DatasetId")
-                        .HasDatabaseName("idx_filerecords_dataset");
-
-                    b.HasIndex("DatePublished")
-                        .HasDatabaseName("idx_filerecords_date");
-
-                    b.ToTable("FileRecords");
                 });
 
             modelBuilder.Entity("MetadataTagging.Models.FileTag", b =>
@@ -459,134 +449,6 @@ namespace MetadataTagging.Data.Migrations
                         .HasDatabaseName("idx_keywords_value");
 
                     b.ToTable("Keywords");
-                });
-
-            modelBuilder.Entity("MetadataTagging.Models.SoundDataset", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("text");
-
-                    b.Property<string>("CreatorName")
-                        .HasColumnType("text");
-
-                    b.Property<string>("DateCreated")
-                        .HasColumnType("text");
-
-                    b.Property<string>("DateModified")
-                        .HasColumnType("text");
-
-                    b.Property<string>("DatePublished")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Description")
-                        .HasColumnType("text");
-
-                    b.Property<string>("InLanguageIdentifier")
-                        .HasColumnType("text");
-
-                    b.Property<string>("InLanguageName")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Keywords")
-                        .HasColumnType("text");
-
-                    b.Property<string>("License")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<bool>("PiiScreening")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("ProviderName")
-                        .HasColumnType("text");
-
-                    b.Property<bool>("SensitiveContent")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("SourceOrganizationName")
-                        .HasColumnType("text");
-
-                    b.Property<string>("SpatialCoverage")
-                        .HasColumnType("text");
-
-                    b.Property<string>("SubjectLanguageCode")
-                        .HasColumnType("text");
-
-                    b.Property<string>("SubjectLanguageName")
-                        .HasColumnType("text");
-
-                    b.Property<string>("TemporalCoverage")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Version")
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("SoundDatasets");
-                });
-
-            modelBuilder.Entity("MetadataTagging.Models.SoundFileRecord", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("text");
-
-                    b.Property<double>("Bitrate")
-                        .HasColumnType("double precision");
-
-                    b.Property<int>("Channels")
-                        .HasColumnType("integer");
-
-                    b.Property<long?>("ContentSize")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("ContentUrl")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("DateModified")
-                        .HasColumnType("text");
-
-                    b.Property<double>("Duration")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("EncodingFormat")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<double?>("IntegratedLoudness")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<double>("SampleRate")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("Sha256")
-                        .HasColumnType("text");
-
-                    b.Property<double?>("SignalToNoiseRatio")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("SoundDatasetId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ContentUrl")
-                        .IsUnique()
-                        .HasDatabaseName("idx_soundfilerecords_contenturl");
-
-                    b.HasIndex("SoundDatasetId")
-                        .HasDatabaseName("idx_soundfilerecords_dataset");
-
-                    b.ToTable("SoundFileRecords");
                 });
 
             modelBuilder.Entity("MetadataTagging.Models.StudentSupervisor", b =>
@@ -702,6 +564,17 @@ namespace MetadataTagging.Data.Migrations
                     b.ToTable("Users");
                 });
 
+            modelBuilder.Entity("MetadataTagging.Models.CollectionFile", b =>
+                {
+                    b.HasOne("MetadataTagging.Models.Collection", "Collection")
+                        .WithMany("Files")
+                        .HasForeignKey("CollectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Collection");
+                });
+
             modelBuilder.Entity("MetadataTagging.Models.FileAssignment", b =>
                 {
                     b.HasOne("MetadataTagging.Models.FileMetadata", "FileMetadata")
@@ -721,17 +594,6 @@ namespace MetadataTagging.Data.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("MetadataTagging.Models.FileRecord", b =>
-                {
-                    b.HasOne("MetadataTagging.Models.Dataset", "Dataset")
-                        .WithMany("Files")
-                        .HasForeignKey("DatasetId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Dataset");
-                });
-
             modelBuilder.Entity("MetadataTagging.Models.FileTag", b =>
                 {
                     b.HasOne("MetadataTagging.Models.FileMetadata", "FileMetadata")
@@ -745,24 +607,13 @@ namespace MetadataTagging.Data.Migrations
 
             modelBuilder.Entity("MetadataTagging.Models.Keyword", b =>
                 {
-                    b.HasOne("MetadataTagging.Models.FileRecord", "File")
+                    b.HasOne("MetadataTagging.Models.CollectionFile", "File")
                         .WithMany("Keywords")
                         .HasForeignKey("FileId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.Navigation("File");
-                });
-
-            modelBuilder.Entity("MetadataTagging.Models.SoundFileRecord", b =>
-                {
-                    b.HasOne("MetadataTagging.Models.SoundDataset", "Dataset")
-                        .WithMany("Files")
-                        .HasForeignKey("SoundDatasetId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Dataset");
                 });
 
             modelBuilder.Entity("MetadataTagging.Models.StudentSupervisor", b =>
@@ -794,7 +645,7 @@ namespace MetadataTagging.Data.Migrations
 
             modelBuilder.Entity("MetadataTagging.Models.Theme", b =>
                 {
-                    b.HasOne("MetadataTagging.Models.FileRecord", "File")
+                    b.HasOne("MetadataTagging.Models.CollectionFile", "File")
                         .WithMany("Themes")
                         .HasForeignKey("FileId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -803,9 +654,16 @@ namespace MetadataTagging.Data.Migrations
                     b.Navigation("File");
                 });
 
-            modelBuilder.Entity("MetadataTagging.Models.Dataset", b =>
+            modelBuilder.Entity("MetadataTagging.Models.Collection", b =>
                 {
                     b.Navigation("Files");
+                });
+
+            modelBuilder.Entity("MetadataTagging.Models.CollectionFile", b =>
+                {
+                    b.Navigation("Keywords");
+
+                    b.Navigation("Themes");
                 });
 
             modelBuilder.Entity("MetadataTagging.Models.FileMetadata", b =>
@@ -813,18 +671,6 @@ namespace MetadataTagging.Data.Migrations
                     b.Navigation("FileAssignments");
 
                     b.Navigation("Tags");
-                });
-
-            modelBuilder.Entity("MetadataTagging.Models.FileRecord", b =>
-                {
-                    b.Navigation("Keywords");
-
-                    b.Navigation("Themes");
-                });
-
-            modelBuilder.Entity("MetadataTagging.Models.SoundDataset", b =>
-                {
-                    b.Navigation("Files");
                 });
 
             modelBuilder.Entity("MetadataTagging.Models.User", b =>

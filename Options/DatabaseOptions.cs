@@ -12,4 +12,10 @@ public class DatabaseOptions
     public string Username { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
     public string DataSource { get; set; } = "app.db";
+
+    /// <summary>
+    /// When true, every table is dropped on startup and the schema is rebuilt from the
+    /// migrations. Destroys all data on every restart while enabled.
+    /// </summary>
+    public bool ResetOnStartup { get; set; } = false;
 }

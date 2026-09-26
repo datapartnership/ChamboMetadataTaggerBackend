@@ -1,10 +1,10 @@
 namespace MetadataTagger.Options;
 
 /// <summary>
-/// Configuration for validating Azure Entra ID (Azure AD) access tokens as an
-/// additional authentication scheme, alongside the existing local JWT login.
-/// Entra ID authentication is only enabled when <see cref="TenantId"/> and
-/// <see cref="ClientId"/> are both configured.
+/// Configuration for validating Azure Entra ID (Azure AD) access tokens.
+/// Used when <see cref="AuthenticationOptions.Method"/> is
+/// <see cref="AuthenticationMethods.EntraId"/>. Requires <see cref="TenantId"/>
+/// and <see cref="ClientId"/> to be set.
 /// </summary>
 public class EntraIdOptions
 {

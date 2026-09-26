@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.Options;
 using System.Security.Claims;
 using MetadataTagging.DTOs;
 using MetadataTagging.Services;
+using MetadataTagger.Options;
 
 namespace MetadataTagging.Controllers;
 
@@ -11,15 +13,23 @@ namespace MetadataTagging.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly AuthenticationOptions _authenticationOptions;
 
-    public AuthController(IAuthService authService)
+    public AuthController(IAuthService authService, IOptions<AuthenticationOptions> authenticationOptions)
     {
         _authService = authService;
+        _authenticationOptions = authenticationOptions.Value;
     }
 
     [HttpPost("login")]
     public async Task<ActionResult<ApiResponse<LoginResponse>>> Login([FromBody] LoginRequest request)
     {
+        if (!_authenticationOptions.IsJwt)
+        {
+            return BadRequest(ApiResponse<LoginResponse>.ErrorResponse(
+                $"Email/password login is only available when Authentication:Method is Jwt (current: {_authenticationOptions.Method})."));
+        }
+
         try
         {
             var token = await _authService.AuthenticateAsync(request.Email, request.Password);

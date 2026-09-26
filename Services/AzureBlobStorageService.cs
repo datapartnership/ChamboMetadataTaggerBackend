@@ -2,6 +2,8 @@ using Azure;
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using Azure.Storage.Blobs.Specialized;
+using Azure.Storage.Sas;
 using Microsoft.Extensions.Options;
 using MetadataTagger.Options;
 
@@ -17,14 +19,16 @@ namespace MetadataTagging.Services;
 public sealed class AzureBlobStorageService : IFileStorageService
 {
     private readonly BlobContainerClient _container;
+    private readonly ILogger<AzureBlobStorageService> _logger;
 
-    public AzureBlobStorageService(IOptions<CatalogStorageOptions> storageOptions, string? containerOverride = null)
+    public AzureBlobStorageService(IOptions<CatalogStorageOptions> storageOptions, ILogger<AzureBlobStorageService> logger)
     {
+        _logger = logger;
         var azure = storageOptions.Value.Azure;
 
-        var containerName = string.IsNullOrEmpty(containerOverride) ? azure.ContainerName : containerOverride;
+        var containerName = azure.ContainerName;
         if (string.IsNullOrEmpty(containerName))
-            throw new InvalidOperationException("Storage:Azure:ContainerName (or sound container override) is required.");
+            throw new InvalidOperationException("CatalogStorage:Azure:ContainerName is required.");
 
         if (!string.IsNullOrEmpty(azure.ConnectionString))
         {
@@ -41,7 +45,7 @@ public sealed class AzureBlobStorageService : IFileStorageService
         else
         {
             throw new InvalidOperationException(
-                "Either Storage:Azure:ConnectionString or Storage:Azure:ServiceUri must be provided.");
+                "Either CatalogStorage:Azure:ConnectionString or CatalogStorage:Azure:ServiceUri must be provided.");
         }
     }
 
@@ -88,8 +92,78 @@ public sealed class AzureBlobStorageService : IFileStorageService
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
-            throw new FileNotFoundException(
-                $"Blob '{key}' not found in container '{_container.Name}'.", key);
+            throw NotFound(key);
         }
     }
+
+    /// <inheritdoc/>
+    public async Task<Stream> OpenReadRangeAsync(string key, long offset, long length, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _container.GetBlobClient(key).DownloadStreamingAsync(
+                new BlobDownloadOptions { Range = new HttpRange(offset, length) }, ct);
+            return response.Value.Content;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            throw NotFound(key);
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<StorageFileEntry?> GetEntryAsync(string key, CancellationToken ct = default)
+    {
+        try
+        {
+            var properties = (await _container.GetBlobClient(key).GetPropertiesAsync(cancellationToken: ct)).Value;
+            return new StorageFileEntry(key, properties.ContentLength, properties.LastModified, properties.ETag.ToString());
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            return null;
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Signs with the account key when the connection string has one; otherwise requests a
+    /// user delegation key, which needs the <c>Storage Blob Delegator</c> role (included in
+    /// <c>Storage Blob Data Reader</c>/<c>Contributor</c>).
+    /// </remarks>
+    public async Task<string?> GetReadUrlAsync(string key, TimeSpan expiry, CancellationToken ct = default)
+    {
+        var blobClient = _container.GetBlobClient(key);
+        var startsOn = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var sas = new BlobSasBuilder
+        {
+            BlobContainerName = _container.Name,
+            BlobName = key,
+            Resource = "b",
+            StartsOn = startsOn,
+            ExpiresOn = DateTimeOffset.UtcNow.Add(expiry),
+        };
+        sas.SetPermissions(BlobSasPermissions.Read);
+
+        if (blobClient.CanGenerateSasUri)
+            return blobClient.GenerateSasUri(sas).ToString();
+
+        try
+        {
+            var service = _container.GetParentBlobServiceClient();
+            var delegationKey = await service.GetUserDelegationKeyAsync(startsOn, sas.ExpiresOn, ct);
+            return new BlobUriBuilder(blobClient.Uri)
+            {
+                Sas = sas.ToSasQueryParameters(delegationKey.Value, service.AccountName),
+            }.ToUri().ToString();
+        }
+        catch (RequestFailedException ex)
+        {
+            _logger.LogWarning(ex, "Could not create a user delegation SAS for '{Key}'; returning the unsigned blob URL.", key);
+            return blobClient.Uri.ToString();
+        }
+    }
+
+    private FileNotFoundException NotFound(string key) =>
+        new($"Blob '{key}' not found in container '{_container.Name}'.", key);
 }

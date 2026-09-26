@@ -15,19 +15,22 @@ public sealed class S3FileStorageService : IFileStorageService, IDisposable
 {
     private readonly AmazonS3Client _client;
     private readonly string _bucket;
+    private readonly Protocol _urlProtocol;
 
-    public S3FileStorageService(IOptions<CatalogStorageOptions> storageOptions, string? bucketOverride = null)
+    public S3FileStorageService(IOptions<CatalogStorageOptions> storageOptions)
     {
         var s3 = storageOptions.Value.S3;
 
         if (string.IsNullOrEmpty(s3.ServiceUrl))
-            throw new InvalidOperationException("Storage:S3:ServiceUrl is required.");
+            throw new InvalidOperationException("CatalogStorage:S3:ServiceUrl is required.");
 
-        var bucket = string.IsNullOrEmpty(bucketOverride) ? s3.BucketName : bucketOverride;
-        if (string.IsNullOrEmpty(bucket))
-            throw new InvalidOperationException("Storage:S3:BucketName (or sound bucket override) is required.");
+        if (string.IsNullOrEmpty(s3.BucketName))
+            throw new InvalidOperationException("CatalogStorage:S3:BucketName is required.");
 
-        _bucket = bucket;
+        _bucket = s3.BucketName;
+        _urlProtocol = s3.ServiceUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            ? Protocol.HTTP
+            : Protocol.HTTPS;
 
         var credentials = new BasicAWSCredentials(s3.AccessKey, s3.SecretKey);
 
@@ -81,14 +84,20 @@ public sealed class S3FileStorageService : IFileStorageService, IDisposable
         return k.StartsWith("./", StringComparison.Ordinal) ? k[2..] : k;
     }
 
-    public async Task<Stream> OpenReadAsync(string key, CancellationToken ct = default)
-    {
-        var request = new GetObjectRequest
+    public Task<Stream> OpenReadAsync(string key, CancellationToken ct = default) =>
+        GetObjectAsync(new GetObjectRequest { BucketName = _bucket, Key = NormalizeKey(key) }, ct);
+
+    /// <inheritdoc/>
+    public Task<Stream> OpenReadRangeAsync(string key, long offset, long length, CancellationToken ct = default) =>
+        GetObjectAsync(new GetObjectRequest
         {
             BucketName = _bucket,
             Key        = NormalizeKey(key),
-        };
+            ByteRange  = new ByteRange(offset, offset + length - 1),
+        }, ct);
 
+    private async Task<Stream> GetObjectAsync(GetObjectRequest request, CancellationToken ct)
+    {
         GetObjectResponse response;
         try
         {
@@ -96,12 +105,41 @@ public sealed class S3FileStorageService : IFileStorageService, IDisposable
         }
         catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
-            throw new FileNotFoundException($"Object '{key}' not found in bucket '{_bucket}'.", key);
+            throw new FileNotFoundException($"Object '{request.Key}' not found in bucket '{_bucket}'.", request.Key);
         }
 
         // Wrap the S3 response stream so it is disposed together with the response object.
         return new S3ResponseStream(response);
     }
+
+    /// <inheritdoc/>
+    public async Task<StorageFileEntry?> GetEntryAsync(string key, CancellationToken ct = default)
+    {
+        try
+        {
+            var metadata = await _client.GetObjectMetadataAsync(_bucket, NormalizeKey(key), ct);
+            return new StorageFileEntry(
+                key,
+                metadata.ContentLength,
+                metadata.LastModified is { } lastModified ? new DateTimeOffset(lastModified) : default,
+                metadata.ETag?.Trim('"'));
+        }
+        catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    /// <inheritdoc/>
+    public Task<string?> GetReadUrlAsync(string key, TimeSpan expiry, CancellationToken ct = default) =>
+        Task.FromResult<string?>(_client.GetPreSignedURL(new GetPreSignedUrlRequest
+        {
+            BucketName = _bucket,
+            Key        = NormalizeKey(key),
+            Verb       = HttpVerb.GET,
+            Protocol   = _urlProtocol,
+            Expires    = DateTime.UtcNow.Add(expiry),
+        }));
 
     public void Dispose() => _client.Dispose();
 

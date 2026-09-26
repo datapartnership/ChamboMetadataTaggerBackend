@@ -251,8 +251,7 @@ These sections configure the public catalog API endpoints (see the README's
 
 | Section | Purpose |
 |---|---|
-| `CatalogStorage` | File storage for the catalog API's text/sound/collections downloads (`local`, `s3`, or `azure`). Kept separate from `Storage` above, which configures Chambo's own file-tagging inbox. |
-| `CollectionCatalog` | Whether/how the Collections catalog Excel workbook (in `CatalogStorage`) is synced on startup and via `POST /api/catalog/collections/sync`. |
+| `CatalogStorage` | The application's only file storage (`local`, `s3`, or `azure`), holding all content as `{Provider}/{Collection}/...` (audio/video collections contain a `*_metadata.jsonld`; text collections don't). Taggers and supervisors list, preview and stream files from it, `POST /api/seed` scans it to build the catalog, and catalog downloads are served from it. Preview URLs need `s3` (presigned) or `azure` (SAS: account key from the connection string, or a user delegation key when using `ServiceUri` + managed identity). With `local`, preview endpoints return 400 and only the `/stream` endpoints work. |
 | `RateLimit` | `DailyFileDownloadLimit` — per-user daily cap on catalog file downloads (`0` = unlimited). |
 
 See `.env.example` for the full list of environment-variable keys for each section.

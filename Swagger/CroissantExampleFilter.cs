@@ -52,11 +52,11 @@ public class CroissantExampleFilter : IOperationFilter
                 new OpenApiObject
                 {
                     ["@type"]                = new OpenApiString("sc:Dataset"),
-                    ["@id"]                  = new OpenApiString("nation-2024"),
+                    ["@id"]                  = new OpenApiString("col-3f9a1c2b7d4e"),
+                    ["sc:identifier"]        = new OpenApiString("col-3f9a1c2b7d4e"),
                     ["sc:name"]              = new OpenApiString("Nation Newspaper 2024"),
+                    ["ddpv:mediaType"]       = new OpenApiString("Text"),
                     ["sc:temporalCoverage"]  = new OpenApiString("2024"),
-                    ["sc:spatialCoverage"]   = new OpenApiString("Malawi"),
-                    ["sc:inLanguage"]        = new OpenApiString("ny"),
                     ["sc:creator"] = new OpenApiObject
                     {
                         ["@type"]   = new OpenApiString("sc:Organization"),
@@ -75,22 +75,19 @@ public class CroissantExampleFilter : IOperationFilter
                         new OpenApiObject
                         {
                             ["@type"]              = new OpenApiString("cr:FileObject"),
-                            ["@id"]                = new OpenApiString("nation-2024/nation-2024-01-15.pdf"),
+                            ["@id"]                = new OpenApiString("file-1a2b3c4d5e6f7a8b"),
                             ["sc:name"]            = new OpenApiString("nation-2024-01-15.pdf"),
-                            ["sc:contentUrl"]      = new OpenApiString("https://localhost:5001/api/files/file-2024-001005c4"),
+                            ["sc:contentUrl"]      = new OpenApiString("https://localhost:5001/api/files/file-1a2b3c4d5e6f7a8b"),
                             ["sc:encodingFormat"]  = new OpenApiString("application/pdf"),
                             ["sc:contentSize"]     = new OpenApiLong(204800),
                             ["cr:sha256"]          = new OpenApiString("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
                             ["sc:author"]          = new OpenApiString("John Banda"),
                             ["sc:datePublished"]   = new OpenApiString("2024-01-15"),
                             ["sc:dateModified"]    = new OpenApiString("2024-01-16"),
-                            ["sc:inLanguage"]      = new OpenApiString("ny"),
                             ["sc:numberOfPages"]   = new OpenApiInteger(4),
                             ["sc:wordCount"]       = new OpenApiInteger(1500),
                             ["ddpv:tokenCount"]    = new OpenApiInteger(120),
                             ["ddpv:charCount"]     = new OpenApiInteger(8500),
-                            ["dct:subject"]        = new OpenApiString("news"),
-                            ["olac:discourseType"] = new OpenApiString("news article"),
                             ["sc:keywords"] = new OpenApiArray
                             {
                                 new OpenApiString("malaria"),

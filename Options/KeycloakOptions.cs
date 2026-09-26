@@ -1,11 +1,10 @@
 namespace MetadataTagger.Options;
 
 /// <summary>
-/// Configuration for validating Keycloak access tokens as an additional authentication
-/// scheme, alongside the existing local JWT login and Entra ID. Keycloak authentication is
-/// only enabled when <see cref="Authority"/> is configured. Ported from the LRLL merge and
-/// adapted to Chambo's group/role-mapping + JIT-provisioning auth pattern (see
-/// <see cref="EntraIdOptions"/> and <see cref="MetadataTagging.Authentication.KeycloakTokenClaimsNormalizer"/>).
+/// Configuration for validating Keycloak access tokens. Used when
+/// <see cref="AuthenticationOptions.Method"/> is
+/// <see cref="AuthenticationMethods.Keycloak"/>. Requires <see cref="Authority"/>
+/// to be set.
 /// </summary>
 public class KeycloakOptions
 {
