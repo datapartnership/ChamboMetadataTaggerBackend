@@ -14,17 +14,21 @@ namespace MetadataTagging.Services;
 /// Authentication: uses <see cref="CatalogAzureOptions.ConnectionString"/> when set;
 /// otherwise uses <see cref="CatalogAzureOptions.ServiceUri"/> with <see cref="DefaultAzureCredential"/>
 /// (workload identity, managed identity, developer CLI, etc.).
+/// <see cref="CatalogAzureOptions.Prefix"/> is stripped from catalog keys and applied only
+/// when talking to the container, so stored keys stay <c>Provider/Collection/...</c>.
 /// Configuration is read from <see cref="CatalogStorageOptions.Azure"/>.
 /// </summary>
 public sealed class AzureBlobStorageService : IFileStorageService
 {
     private readonly BlobContainerClient _container;
+    private readonly string _prefix;
     private readonly ILogger<AzureBlobStorageService> _logger;
 
     public AzureBlobStorageService(IOptions<CatalogStorageOptions> storageOptions, ILogger<AzureBlobStorageService> logger)
     {
         _logger = logger;
         var azure = storageOptions.Value.Azure;
+        _prefix = AzureBlobPaths.NormalizePrefix(azure.Prefix);
 
         var containerName = azure.ContainerName;
         if (string.IsNullOrEmpty(containerName))
@@ -49,6 +53,44 @@ public sealed class AzureBlobStorageService : IFileStorageService
         }
     }
 
+    /// <summary>
+    /// Lists the folders and files directly under the configured prefix and logs them.
+    /// Called once at startup so a mis-set prefix is visible before anyone seeds.
+    /// </summary>
+    public async Task LogPrefixAsync(CancellationToken ct = default)
+    {
+        var children = new List<string>();
+        await foreach (var item in _container.GetBlobsByHierarchyAsync(
+            traits: BlobTraits.None,
+            states: BlobStates.None,
+            delimiter: "/",
+            prefix: AzureBlobPaths.ToListPrefix(_prefix, ""),
+            cancellationToken: ct))
+        {
+            var name = item.IsPrefix ? item.Prefix : item.Blob?.Name;
+            if (name == null)
+                continue;
+            var logical = AzureBlobPaths.ToLogicalKey(_prefix, name);
+            if (logical != null)
+                children.Add(logical.TrimEnd('/'));
+        }
+
+        children.Sort(StringComparer.Ordinal);
+        if (children.Count == 0)
+        {
+            _logger.LogWarning(
+                "Azure catalog storage container '{Container}' prefix '{Prefix}' is empty.",
+                _container.Name, DisplayPrefix);
+            return;
+        }
+
+        _logger.LogInformation(
+            "Azure catalog storage container '{Container}' prefix '{Prefix}' ({Count} item(s)).",
+            _container.Name, DisplayPrefix, children.Count);
+        foreach (var child in children)
+            _logger.LogInformation("Azure catalog prefix '{Prefix}' contains '{Child}'.", DisplayPrefix, child);
+    }
+
     /// <inheritdoc/>
     public async Task<IReadOnlyList<StorageFileEntry>> ListFilesAsync(string prefix = "", CancellationToken ct = default)
     {
@@ -58,13 +100,16 @@ public sealed class AzureBlobStorageService : IFileStorageService
         var blobs = _container.GetBlobsAsync(
             traits: BlobTraits.None,
             states: BlobStates.None,
-            prefix: string.IsNullOrEmpty(prefix) ? null : prefix,
+            prefix: AzureBlobPaths.ToListPrefix(_prefix, prefix),
             cancellationToken: ct);
 
         await foreach (BlobItem blob in blobs)
         {
+            var key = AzureBlobPaths.ToLogicalKey(_prefix, blob.Name);
+            if (key == null)
+                continue;
             entries.Add(new StorageFileEntry(
-                Key:          blob.Name,
+                Key:          key,
                 Size:         blob.Properties.ContentLength ?? 0,
                 LastModified: blob.Properties.LastModified ?? default,
                 ETag:         blob.Properties.ETag?.ToString()));
@@ -76,7 +121,7 @@ public sealed class AzureBlobStorageService : IFileStorageService
     /// <inheritdoc/>
     public async Task<Stream> OpenReadAsync(string key, CancellationToken ct = default)
     {
-        var blobClient = _container.GetBlobClient(key);
+        var blobClient = _container.GetBlobClient(AzureBlobPaths.ToBlobName(_prefix, key));
 
         try
         {
@@ -101,7 +146,7 @@ public sealed class AzureBlobStorageService : IFileStorageService
     {
         try
         {
-            var response = await _container.GetBlobClient(key).DownloadStreamingAsync(
+            var response = await _container.GetBlobClient(AzureBlobPaths.ToBlobName(_prefix, key)).DownloadStreamingAsync(
                 new BlobDownloadOptions { Range = new HttpRange(offset, length) }, ct);
             return response.Value.Content;
         }
@@ -116,7 +161,7 @@ public sealed class AzureBlobStorageService : IFileStorageService
     {
         try
         {
-            var properties = (await _container.GetBlobClient(key).GetPropertiesAsync(cancellationToken: ct)).Value;
+            var properties = (await _container.GetBlobClient(AzureBlobPaths.ToBlobName(_prefix, key)).GetPropertiesAsync(cancellationToken: ct)).Value;
             return new StorageFileEntry(key, properties.ContentLength, properties.LastModified, properties.ETag.ToString());
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
@@ -133,12 +178,13 @@ public sealed class AzureBlobStorageService : IFileStorageService
     /// </remarks>
     public async Task<string?> GetReadUrlAsync(string key, TimeSpan expiry, CancellationToken ct = default)
     {
-        var blobClient = _container.GetBlobClient(key);
+        var blobName = AzureBlobPaths.ToBlobName(_prefix, key);
+        var blobClient = _container.GetBlobClient(blobName);
         var startsOn = DateTimeOffset.UtcNow.AddMinutes(-5);
         var sas = new BlobSasBuilder
         {
             BlobContainerName = _container.Name,
-            BlobName = key,
+            BlobName = blobName,
             Resource = "b",
             StartsOn = startsOn,
             ExpiresOn = DateTimeOffset.UtcNow.Add(expiry),
@@ -164,6 +210,8 @@ public sealed class AzureBlobStorageService : IFileStorageService
         }
     }
 
+    private string DisplayPrefix => _prefix.Length == 0 ? "(container root)" : _prefix;
+
     private FileNotFoundException NotFound(string key) =>
-        new($"Blob '{key}' not found in container '{_container.Name}'.", key);
+        new($"Blob '{AzureBlobPaths.ToBlobName(_prefix, key)}' not found in container '{_container.Name}'.", key);
 }

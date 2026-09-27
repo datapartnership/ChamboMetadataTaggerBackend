@@ -42,7 +42,7 @@ var dbOptions = builder.Configuration.GetSection(DatabaseOptions.Section).Get<Da
 // lambda causes EF Core to see different options on every request and allocate a new
 // internal IServiceProvider each time, triggering ManyServiceProvidersCreatedWarning.
 Npgsql.NpgsqlDataSource? npgsqlDataSource = null;
-if (dbOptions.Provider.Equals("postgresql", StringComparison.OrdinalIgnoreCase) && dbOptions.UseManagedIdentity)
+if (dbOptions.UseManagedIdentity)
 {
     var connectionString = $"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Ssl Mode=Require;Trust Server Certificate=true;";
     var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
@@ -61,15 +61,10 @@ if (dbOptions.Provider.Equals("postgresql", StringComparison.OrdinalIgnoreCase) 
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
 {
-    if (dbOptions.Provider.Equals("postgresql", StringComparison.OrdinalIgnoreCase))
-    {
-        if (npgsqlDataSource != null)
-            options.UseNpgsql(npgsqlDataSource);
-        else
-            options.UseNpgsql($"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Password={dbOptions.Password}");
-    }
+    if (npgsqlDataSource != null)
+        options.UseNpgsql(npgsqlDataSource);
     else
-        options.UseSqlite($"Data Source={dbOptions.DataSource}");
+        options.UseNpgsql($"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Password={dbOptions.Password}");
 });
 
 builder.Services.AddScoped<IAuthService, AuthService>();
@@ -434,13 +429,13 @@ using (var scope = app.Services.CreateScope())
     {
         var canConnect = await dbContext.Database.CanConnectAsync();
         if (canConnect)
-            logger.LogInformation("Database connected successfully (provider: {Provider}).", dbOptions.Provider);
+            logger.LogInformation("Database connected successfully ({Host}/{Database}).", dbOptions.Host, dbOptions.Name);
         else
-            logger.LogWarning("Database connection check failed (provider: {Provider}).", dbOptions.Provider);
+            logger.LogWarning("Database connection check failed ({Host}/{Database}).", dbOptions.Host, dbOptions.Name);
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "Failed to connect to database (provider: {Provider}).", dbOptions.Provider);
+        logger.LogError(ex, "Failed to connect to database ({Host}/{Database}).", dbOptions.Host, dbOptions.Name);
     }
 
     // Create default Admin user
@@ -509,6 +504,20 @@ using (var scope = app.Services.CreateScope())
             };
             dbContext.Users.Add(supervisorUser);
             await dbContext.SaveChangesAsync();
+        }
+    }
+
+    if (catalogStorageOptions.Provider.Equals("azure", StringComparison.OrdinalIgnoreCase)
+        && scope.ServiceProvider.GetRequiredService<IFileStorageService>() is AzureBlobStorageService azureStorage)
+    {
+        try
+        {
+            await azureStorage.LogPrefixAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to list Azure catalog storage prefix '{Prefix}'.",
+                string.IsNullOrEmpty(catalogStorageOptions.Azure.Prefix) ? "(container root)" : catalogStorageOptions.Azure.Prefix);
         }
     }
 }

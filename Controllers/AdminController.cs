@@ -709,24 +709,30 @@ public class AdminController : ControllerBase
     }
 
     [HttpPost("reset-database")]
-    public async Task<ActionResult<ApiResponse<bool>>> ResetDatabase([FromServices] CatalogTagPublisher publisher)
+    public async Task<ActionResult<ApiResponse<bool>>> ResetDatabase()
     {
         try
         {
             _logger.LogWarning("Database reset initiated by admin");
 
-            var taggedKeys = await TaggedBlobNamesAsync();
-            await _dbContext.FileTags.ExecuteDeleteAsync();
-            await _dbContext.FileAssignments.ExecuteDeleteAsync();
-            await _dbContext.StudentSupervisors.ExecuteDeleteAsync();
-            await _dbContext.FileMetadata.ExecuteDeleteAsync();
+            var usersTable = _dbContext.Model.FindEntityType(typeof(User))!.GetTableName();
+            var tables = _dbContext.Model.GetEntityTypes()
+                .Select(e => e.GetTableName())
+                .Where(t => t != null && t != usersTable)
+                .Distinct()
+                .Select(t => $"\"{t}\"");
+            var truncateSql = "TRUNCATE TABLE " + string.Join(", ", tables) + " RESTART IDENTITY";
+
+            // Admin accounts are kept so the caller can still sign in afterwards.
+            await using var tx = await _dbContext.Database.BeginTransactionAsync();
+            await _dbContext.Database.ExecuteSqlRawAsync(truncateSql);
             await _dbContext.Users
                 .Where(u => u.Role != UserRoles.Admin)
                 .ExecuteDeleteAsync();
-            await publisher.ApplyAsync(taggedKeys);
+            await tx.CommitAsync();
 
             _logger.LogWarning("Database reset completed successfully");
-            return Ok(ApiResponse<bool>.SuccessResponse(true, "Database reset successfully. All non-admin data has been cleared."));
+            return Ok(ApiResponse<bool>.SuccessResponse(true, "Database reset successfully. All tables have been emptied except admin users."));
         }
         catch (Exception ex)
         {

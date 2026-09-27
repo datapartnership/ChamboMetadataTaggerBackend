@@ -6,18 +6,12 @@ public static class DatabaseReset
 {
     /// <summary>
     /// Removes every table (including the migrations history) so the next MigrateAsync()
-    /// rebuilds the schema from scratch. On PostgreSQL the tables are dropped individually
-    /// rather than dropping the database, because the app's (managed identity) role
-    /// typically may not drop or create databases, only the tables it owns.
+    /// rebuilds the schema from scratch. The tables are dropped individually rather than
+    /// dropping the database, because the app's (managed identity) role typically may not
+    /// drop or create databases, only the tables it owns.
     /// </summary>
     public static async Task DropAllTablesAsync(ApplicationDbContext dbContext)
     {
-        if (!dbContext.Database.IsNpgsql())
-        {
-            await dbContext.Database.EnsureDeletedAsync();
-            return;
-        }
-
         await dbContext.Database.ExecuteSqlRawAsync("""
             DO $$
             DECLARE r record;

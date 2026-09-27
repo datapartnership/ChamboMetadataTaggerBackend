@@ -33,6 +33,12 @@ public class CatalogAzureOptions
     /// Used together with DefaultAzureCredential when ConnectionString is empty.</summary>
     public string ServiceUri { get; set; } = "";
     public string ContainerName { get; set; } = "";
+    /// <summary>
+    /// Blob key prefix that sits in front of <c>Provider/Collection/...</c>,
+    /// e.g. <c>markdown/CATALOGPROD</c>. Catalog keys stay relative to this prefix.
+    /// Leave empty to use the container root.
+    /// </summary>
+    public string Prefix { get; set; } = "";
     /// <summary>Client ID of a user-assigned managed identity. Leave empty for system-assigned
     /// managed identity or developer credentials (Azure CLI, VS, etc.).</summary>
     public string ManagedIdentityClientId { get; set; } = "";
