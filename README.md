@@ -15,7 +15,7 @@ A complete ASP.NET Web API 8.0 backend solution for managing file metadata taggi
 - **File Assignment System**: Admins can assign blob files directly to taggers
 - **Metadata Tagging**: Taggers can add custom key-value tags to files
 - **Progress Tracking**: Admins can monitor tagging completion status
-- **SQLite Database**: Lightweight database for data persistence
+- **PostgreSQL Database**: Data persistence with schema managed by EF Core Migrations
 
 ## Workflow
 
@@ -113,13 +113,18 @@ Copy `.env.example` to `.env` and fill in your values. ASP.NET Core maps environ
 
 | Environment Variable | Description | Required |
 |---|---|---|
-| `DatabaseProvider` | Database backend: `sqlite` (default) or `postgresql` | No (default: `sqlite`) |
+| `Database__Host` | PostgreSQL host | **Yes** |
+| `Database__Port` | PostgreSQL port | No (default: `5432`) |
+| `Database__Name` | PostgreSQL database name | **Yes** |
+| `Database__Username` | PostgreSQL user | **Yes** |
+| `Database__Password` | PostgreSQL password (not used with managed identity) | When not using managed identity |
+| `Database__UseManagedIdentity` | Authenticate to Azure Database for PostgreSQL with a managed identity token | No (default: `false`) |
+| `Database__ManagedIdentityClientId` | Client ID of a user-assigned managed identity | No |
 | `JwtSettings__SecretKey` | JWT signing secret (min. 32 characters) | **Yes** |
 | `JwtSettings__Issuer` | JWT issuer identifier | No (default: `MetadataTaggingAPI`) |
 | `JwtSettings__Audience` | JWT audience identifier | No (default: `MetadataTaggingClient`) |
 | `JwtSettings__ExpiryMinutes` | Token expiry in minutes | No (default: `480`) |
 | `CatalogStorage__Provider` | File storage: `local`, `s3`, or `azure` (see `.env.example` for each provider's keys) | No (default: `local`) |
-| `ConnectionStrings__PostgreSQLConnection` | PostgreSQL connection string (required when `DatabaseProvider=postgresql`) | No |
 | `DefaultAdmin__Username` | Default admin username | No |
 | `DefaultAdmin__Email` | Default admin email | No |
 | `DefaultAdmin__Password` | Default admin password | No |
@@ -143,11 +148,13 @@ openssl rand -base64 48
 
 ```json
 {
-  "ConnectionStrings": {
-    "DefaultConnection": "Data Source=metadatatagging.db",
-    "PostgreSQLConnection": "Host=localhost;Port=5432;Database=metadatatagging;Username=postgres;Password=yourpassword"
+  "Database": {
+    "Host": "localhost",
+    "Port": 5432,
+    "Name": "metadatatagging",
+    "Username": "postgres",
+    "Password": "yourpassword"
   },
-  "DatabaseProvider": "sqlite",
   "JwtSettings": {
     "SecretKey": "your-secret-key-here-min-32-characters-long-change-in-production",
     "Issuer": "MetadataTaggingAPI",
@@ -196,7 +203,7 @@ dotnet run
 
 ### Database
 
-The SQLite database will be automatically created on first run. A default admin user is automatically created based on the `DefaultAdmin` configuration in `appsettings.json`:
+A PostgreSQL database is required. The schema is applied automatically on startup by EF Core Migrations. A default admin user is automatically created based on the `DefaultAdmin` configuration in `appsettings.json`:
 
 - **Email**: `admin@metadatatagging.com` (configurable)
 - **Username**: `admin` (configurable)
@@ -320,9 +327,10 @@ catalog file (unsupported extension, outside the layout, or missing from storage
 
 ### Endpoints
 
-- `POST /api/seed` (Write) — scan storage and sync the catalog tables.
-  `POST /api/seed/reset-db` (Write) — empty the catalog tables. Neither touches this app's own
-  Users/FileMetadata/FileAssignments/FileTags/StudentSupervisors tables.
+- `POST /api/seed` (Write) — scan storage and sync the catalog tables. It does not touch this
+  app's own Users/FileMetadata/FileAssignments/FileTags/StudentSupervisors tables.
+- `POST /api/admin/reset-database` (Admin) — empty every table (tagging and catalog) except
+  admin users.
 - `GET /api/catalog/collections`, `/{id}`, `/{id}/files`, `/facets` (anonymous) — paginated
   collection browser data.
 - `GET /api/collections/query` (Read) — Croissant JSON-LD query across collections, filterable
@@ -634,7 +642,7 @@ const markdownText = await markdownResponse.text();
 
 - ASP.NET Core 8.0 Web API
 - Entity Framework Core 8.0
-- SQLite
+- PostgreSQL (Npgsql)
 - JWT Bearer Authentication
 - Azure Storage Blobs SDK
 - BCrypt.Net for password hashing

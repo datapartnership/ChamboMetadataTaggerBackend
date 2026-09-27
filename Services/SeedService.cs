@@ -97,6 +97,8 @@ public class SeedService(
             // Hidden files and folders (.DS_Store, pipeline checkpoints, ...) are never catalog content.
             if (segments.Any(s => s.StartsWith('.')))
                 continue;
+            if (segments[..^1].Any(s => s.Contains("checkpoints", StringComparison.OrdinalIgnoreCase)))
+                continue;
 
             if (segments.Length < 3 || segments.Take(2).Any(s => s.Length == 0))
             {

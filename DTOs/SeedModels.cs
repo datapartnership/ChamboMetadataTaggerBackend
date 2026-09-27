@@ -35,15 +35,3 @@ public class SeedResult
     /// <summary>Human-readable summary message.</summary>
     public string Message { get; set; } = string.Empty;
 }
-
-/// <summary>Summary returned after resetting API-managed database tables.</summary>
-public class ResetDbResult
-{
-    public int CollectionsDeleted { get; set; }
-    public int FilesDeleted { get; set; }
-    public int KeywordsDeleted { get; set; }
-    public int ThemesDeleted { get; set; }
-
-    /// <summary>Human-readable summary message.</summary>
-    public string Message { get; set; } = string.Empty;
-}

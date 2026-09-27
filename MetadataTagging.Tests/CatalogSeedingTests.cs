@@ -60,6 +60,33 @@ public class CatalogSeedingTests
     }
 
     [Fact]
+    public void Parser_ReadsNestedTranscriptsWithProviderRelativeUrls()
+    {
+        var json = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["sc:name"]      = "KBJ",
+            ["distribution"] = new[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["sc:name"]               = "ep01.wav",
+                    ["sc:contentUrl"]         = "/KBJ/sub/ep01.wav",
+                    ["sc:encodingFormat"]     = "audio/wav",
+                    ["ebucore:hasTranscript"] = new Dictionary<string, object?> { ["sc:contentUrl"] = "/KBJ/sub/ep01.txt" },
+                },
+            },
+        });
+
+        var (_, files) = new CroissantMetadataParser().Parse(json, KbjPrefix, "Radio", MediaType.Audio);
+        var byUrl = files.ToDictionary(f => f.ContentUrl);
+
+        var transcript = byUrl[$"{KbjPrefix}/sub/ep01.txt"];
+        Assert.Equal(FileKind.Transcription, transcript.Kind);
+        Assert.Equal("ep01.txt", transcript.Name);
+        Assert.Equal(transcript.Id, byUrl[$"{KbjPrefix}/sub/ep01.wav"].TranscriptionFileId);
+    }
+
+    [Fact]
     public void Parser_PrefersSameFolderAndSkipsAmbiguousMatches()
     {
         var json = Metadata("kbj", "KBJ",
@@ -131,6 +158,10 @@ public class CatalogSeedingTests
             ["Radio/Photos/a.png"]                     = "x",
             ["Radio/.checkpoints/state.json"]          = "x",
             ["Radio/Hidden/.cache/h_metadata.jsonld"]  = "{}",
+            ["Radio/model_checkpoints/notes.txt"]      = "x",
+            ["Radio/Talk/Checkpoints_v2/t_metadata.jsonld"] = "{}",
+            ["Radio/Talk/Checkpoints_v2/ep01.flac"]    = "x",
+            ["Checkpoints/Run1/notes.txt"]             = "x",
         };
 
         var result = await CreateSeeder(ctx.Db, storage).SeedAsync();
@@ -140,7 +171,8 @@ public class CatalogSeedingTests
             w.Contains("2 file(s) are not inside a Provider/Collection folder") && w.Contains("readme.txt") && w.Contains("Radio/notes.txt"));
         Assert.Contains(result.Warnings, w => w.Contains("'Radio/NoMetadata' contains audio/video but no"));
         Assert.Contains(result.Warnings, w => w.Contains("'Radio/Photos' has no") && w.Contains(".pdf, .txt, or .md"));
-        Assert.DoesNotContain(result.Warnings, w => w.Contains(".checkpoints") || w.Contains("Hidden"));
+        Assert.DoesNotContain(result.Warnings, w => w.Contains(".checkpoints") || w.Contains("Hidden") ||
+            w.Contains("checkpoints", StringComparison.OrdinalIgnoreCase) || w.Contains("Radio/Talk"));
     }
 
     [Fact]

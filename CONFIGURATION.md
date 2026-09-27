@@ -108,8 +108,12 @@ public class AzureBlobService : IAzureBlobService
 
 ```json
 {
-  "ConnectionStrings": {
-    "DefaultConnection": "Data Source=metadatatagging.db"
+  "Database": {
+    "Host": "localhost",
+    "Port": 5432,
+    "Name": "metadatatagging",
+    "Username": "postgres",
+    "Password": "yourpassword"
   },
   "JwtSettings": {
     "SecretKey": "your-secret-key-here-min-32-characters-long-change-in-production",

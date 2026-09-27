@@ -78,9 +78,7 @@ public class CroissantMetadataParser
                 if (name.Length == 0)
                     continue;
 
-                var contentKey = rawUrl != null && rawUrl.StartsWith(storagePrefix + "/", StringComparison.Ordinal)
-                    ? rawUrl
-                    : $"{storagePrefix}/{name.TrimStart('/')}";
+                var contentKey = ResolveKey(rawUrl, name, storagePrefix);
 
                 var encodingFormat = GetString(entry, "sc:encodingFormat");
                 var kind = ResolveKind(contentKey, encodingFormat, mediaType);
@@ -108,11 +106,53 @@ public class CroissantMetadataParser
                         ? GetDouble(entry, "ebucore:signalToNoiseRatio") ?? GetDouble(entry, "ddpv:snrProxyDb")
                         : null,
                 });
+
+                if (isMedia && TranscriptFrom(entry, storagePrefix, collection.Id) is { } transcript)
+                    files.Add(transcript);
             }
         }
 
         PairTranscriptions(files);
         return (collection, files);
+    }
+
+    /// <summary>
+    /// Storage key for a <c>sc:contentUrl</c>: kept when under <paramref name="storagePrefix"/>,
+    /// re-rooted when relative to the provider folder (<c>/CollectionFolder/sub/a.wav</c>),
+    /// otherwise rebuilt as <c>{storagePrefix}/{name}</c>.
+    /// </summary>
+    private static string ResolveKey(string? rawUrl, string name, string storagePrefix)
+    {
+        if (rawUrl != null && rawUrl.StartsWith(storagePrefix + "/", StringComparison.Ordinal))
+            return rawUrl;
+        var folder = LastSegment(storagePrefix) + "/";
+        if (rawUrl != null && rawUrl.StartsWith(folder, StringComparison.Ordinal))
+            return $"{storagePrefix}/{rawUrl[folder.Length..]}";
+        return $"{storagePrefix}/{name.TrimStart('/')}";
+    }
+
+    /// <summary>The transcription a media entry points at via <c>ebucore:hasTranscript</c>, if any.</summary>
+    private static CollectionFile? TranscriptFrom(JsonElement entry, string storagePrefix, string collectionId)
+    {
+        if (!entry.TryGetProperty("ebucore:hasTranscript", out var transcript))
+            return null;
+        var rawUrl = GetString(transcript, "sc:contentUrl")?.Replace('\\', '/').TrimStart('/');
+        if (string.IsNullOrEmpty(rawUrl))
+            return null;
+
+        var contentKey = ResolveKey(rawUrl, LastSegment(rawUrl), storagePrefix);
+        var encodingFormat = GetString(transcript, "sc:encodingFormat");
+        return new CollectionFile
+        {
+            Id             = FileId(contentKey),
+            CollectionId   = collectionId,
+            Name           = GetString(transcript, "sc:name") ?? LastSegment(contentKey),
+            ContentUrl     = contentKey,
+            Kind           = FileKind.Transcription,
+            EncodingFormat = IsTextFormat(encodingFormat) ? encodingFormat! : "text/plain",
+            ContentSize    = GetLong(transcript, "sc:contentSize"),
+            DateModified   = GetString(transcript, "sc:dateModified"),
+        };
     }
 
     // ── Deterministic IDs ─────────────────────────────────────────────────────
