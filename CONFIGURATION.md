@@ -108,8 +108,12 @@ public class AzureBlobService : IAzureBlobService
 
 ```json
 {
-  "ConnectionStrings": {
-    "DefaultConnection": "Data Source=metadatatagging.db"
+  "Database": {
+    "Host": "localhost",
+    "Port": 5432,
+    "Name": "metadatatagging",
+    "Username": "postgres",
+    "Password": "yourpassword"
   },
   "JwtSettings": {
     "SecretKey": "your-secret-key-here-min-32-characters-long-change-in-production",
@@ -149,8 +153,9 @@ only activates once `EntraId:TenantId` and `EntraId:ClientId` (or the equivalent
    registered. A policy scheme inspects each incoming bearer token's issuer and
    routes it to the right scheme, so existing `[Authorize(Roles = ...)]`
    attributes on controllers require no changes.
-2. Entra ID tokens must carry a `roles` claim (Entra **App Roles**) with one of
-   `Admin`, `Supervisor`, or `Tagger` — tokens without a recognized role are rejected.
+2. Authorization accepts either a `roles` claim (Entra **App Roles**) with one of
+   `Admin`, `Supervisor`, or `Tagger`, or a `groups` claim containing an object ID
+   configured in `EntraId:GroupRoleMappings`.
 3. On first successful Entra ID login, a local `Users` row is automatically
    created (and kept in sync on subsequent logins) from the token's
    email/name/role claims, so existing per-user data (file assignments, audit
@@ -174,11 +179,86 @@ only activates once `EntraId:TenantId` and `EntraId:ClientId` (or the equivalent
 | `EntraId__Instance` | Azure AD instance | No (default: `https://login.microsoftonline.com/`) |
 | `EntraId__Audience` | Expected token audience, if different from `ClientId` | No |
 | `EntraId__RoleClaimType` | Claim type carrying the App Roles | No (default: `roles`) |
+| `EntraId__GroupClaimType` | Claim type carrying Entra group object IDs | No (default: `groups`) |
+| `EntraId__GroupRoleMappings` | Array mapping group object IDs to `Admin`, `Supervisor`, or `Tagger` | No |
+
+Example group mappings:
+
+```json
+{
+  "EntraId": {
+    "GroupClaimType": "groups",
+    "GroupRoleMappings": [
+      { "GroupId": "<admin-group-object-id>", "Role": "Admin" },
+      { "GroupId": "<supervisor-group-object-id>", "Role": "Supervisor" },
+      { "GroupId": "<tagger-group-object-id>", "Role": "Tagger" }
+    ]
+  }
+}
+```
+
+Multiple group IDs may map to the same role. If a user belongs to groups mapped
+to different roles, the existing precedence is `Admin`, then `Supervisor`, then
+`Tagger`. Tokens using Entra group overage claims instead of an inline `groups`
+claim require Microsoft Graph resolution and are not supported by this mapping.
 
 The frontend sends its Entra access token to `GET /api/Auth/me` after the configured
 `/callback` route completes. This validates the token and returns the provisioned local
 application user for the role-specific frontend dashboard.
 
+## Keycloak Authentication (optional)
+
+The API can also accept **Keycloak-issued access tokens**, as a third scheme alongside
+the local email/password JWT login and Entra ID. This is disabled by default and only
+activates once `Keycloak:Authority` (or `Keycloak__Authority`) is set.
+
+### How it works
+
+1. A third JWT bearer scheme (`Keycloak`) is registered alongside `Local` and `EntraId`.
+   The same policy scheme that routes requests by issuer for Entra ID also recognizes
+   Keycloak-issued tokens (by comparing the token issuer to `Keycloak:Authority`), so
+   existing `[Authorize(Roles = ...)]`/policy attributes require no changes.
+2. Keycloak client roles are read from the token's `resource_access[ClientId].roles`
+   claim and mapped onto `Admin`, `Supervisor`, or `Tagger` via `Keycloak:RoleMappings`
+   — the same pattern `EntraId:GroupRoleMappings` uses for Entra ID groups.
+3. On first successful Keycloak login, a local `Users` row is automatically created
+   (and kept in sync on subsequent logins), with `AuthProvider` set to `"Keycloak"`.
+
+| Setting | Description | Required |
+|---|---|---|
+| `Keycloak__Authority` | Keycloak realm base URL (e.g. `https://kc.example.org/realms/myrealm`) | **Yes** (to enable Keycloak auth) |
+| `Keycloak__Audience` | Expected token audience | No |
+| `Keycloak__ClientId` | Keycloak client ID (used to read `resource_access[ClientId].roles` and for Swagger UI's OAuth client) | **Yes** (to enable Keycloak auth) |
+| `Keycloak__RequireHttpsMetadata` | Require HTTPS for the Keycloak metadata endpoint | No (default: `true`) |
+| `Keycloak__RoleMappings` | Array mapping Keycloak client role names to `Admin`, `Supervisor`, or `Tagger` | No |
+
+Example role mappings:
+
+```json
+{
+  "Keycloak": {
+    "Authority": "https://kc.example.org/realms/myrealm",
+    "ClientId": "chambo-api",
+    "RoleMappings": [
+      { "KeycloakRole": "chambo-admin", "Role": "Admin" },
+      { "KeycloakRole": "chambo-supervisor", "Role": "Supervisor" },
+      { "KeycloakRole": "chambo-tagger", "Role": "Tagger" }
+    ]
+  }
+}
+```
+
+## Catalog API configuration (merged from the LRLL API)
+
+These sections configure the public catalog API endpoints (see the README's
+"Catalog API" section for the endpoint list):
+
+| Section | Purpose |
+|---|---|
+| `CatalogStorage` | The application's only file storage (`local`, `s3`, or `azure`), holding all content as `{Provider}/{Collection}/...` (audio/video collections contain a `*_metadata.jsonld`; text collections don't). Taggers and supervisors list, preview and stream files from it, `POST /api/seed` scans it to build the catalog, and catalog downloads are served from it. Preview URLs need `s3` (presigned) or `azure` (SAS: account key from the connection string, or a user delegation key when using `ServiceUri` + managed identity). With `local`, preview endpoints return 400 and only the `/stream` endpoints work. |
+| `RateLimit` | `DailyFileDownloadLimit` — per-user daily cap on catalog file downloads (`0` = unlimited). |
+
+See `.env.example` for the full list of environment-variable keys for each section.
 
 ## Benefits of the Options Pattern
 

@@ -13,12 +13,12 @@ namespace MetadataTagging.Controllers;
 public class TaggerController : ControllerBase
 {
     private readonly IFileService _fileService;
-    private readonly IStorageService _blobService;
+    private readonly IFileStorageService _storage;
 
-    public TaggerController(IFileService fileService, IStorageService blobService)
+    public TaggerController(IFileService fileService, IFileStorageService storage)
     {
         _fileService = fileService;
-        _blobService = blobService;
+        _storage = storage;
     }
 
     [HttpGet("my-files")]
@@ -162,7 +162,11 @@ public class TaggerController : ControllerBase
                 return BadRequest(ApiResponse<FilePreviewDto>.ErrorResponse("File has no associated blob"));
             }
 
-            var previewUrl = await _blobService.GetBlobSasUrlAsync(file.BlobName, expiryMinutes);
+            var previewUrl = await _storage.GetReadUrlAsync(file.BlobName, TimeSpan.FromMinutes(expiryMinutes));
+            if (previewUrl == null)
+            {
+                return BadRequest(ApiResponse<FilePreviewDto>.ErrorResponse(FileService.PreviewUnavailableMessage));
+            }
 
             var preview = new FilePreviewDto
             {
@@ -257,16 +261,7 @@ public class TaggerController : ControllerBase
                 return BadRequest("File has no associated blob");
             }
 
-            var rangeHeader = Request.Headers.Range.FirstOrDefault();
-
-            if (!string.IsNullOrEmpty(rangeHeader))
-            {
-                return await HandleRangeRequest(file.BlobName, file.ContentType ?? "application/octet-stream", rangeHeader);
-            }
-
-            var (content, contentType, contentLength) = await _blobService.DownloadBlobAsync(file.BlobName);
-            Response.Headers.AcceptRanges = "bytes";
-            return File(content, contentType, enableRangeProcessing: false);
+            return await this.StreamStorageFileAsync(_storage, file.BlobName, HttpContext.RequestAborted);
         }
         catch (FileNotFoundException)
         {
@@ -276,30 +271,5 @@ public class TaggerController : ControllerBase
         {
             return StatusCode(500, $"An error occurred while streaming the file: {ex.Message}");
         }
-    }
-
-    private async Task<IActionResult> HandleRangeRequest(string blobName, string contentType, string rangeHeader)
-    {
-        var rangeValue = rangeHeader.Replace("bytes=", "");
-        var parts = rangeValue.Split('-');
-
-        if (!long.TryParse(parts[0], out long start))
-        {
-            return BadRequest("Invalid range header");
-        }
-
-        long? end = parts.Length > 1 && !string.IsNullOrEmpty(parts[1]) ? long.Parse(parts[1]) : null;
-        long? length = end.HasValue ? end.Value - start + 1 : null;
-
-        var (content, resolvedContentType, contentLength, totalSize) =
-            await _blobService.DownloadBlobRangeAsync(blobName, start, length);
-
-        var actualEnd = start + contentLength - 1;
-
-        Response.Headers.AcceptRanges = "bytes";
-        Response.Headers.ContentRange = $"bytes {start}-{actualEnd}/{totalSize}";
-        Response.ContentLength = contentLength;
-
-        return StatusCode(206, File(content, resolvedContentType, enableRangeProcessing: false));
     }
 }

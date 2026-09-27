@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using MetadataTagging.Services;
+using MetadataTagger.Options;
 
 namespace MetadataTagging.Authentication;
 
@@ -13,11 +14,15 @@ namespace MetadataTagging.Authentication;
 /// </summary>
 public static class EntraTokenClaimsNormalizer
 {
-    public static async Task NormalizeAsync(TokenValidatedContext context, string roleClaimType)
+    public static async Task NormalizeAsync(TokenValidatedContext context, EntraIdOptions options)
     {
+        var logger = context.HttpContext.RequestServices
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(EntraTokenClaimsNormalizer));
         var principal = context.Principal;
         if (principal == null)
         {
+            logger.LogWarning("Rejecting validated Entra token because it produced no claims principal.");
             context.Fail("Entra ID token produced no claims principal.");
             return;
         }
@@ -29,12 +34,14 @@ public static class EntraTokenClaimsNormalizer
 
         if (string.IsNullOrWhiteSpace(email))
         {
+            logger.LogWarning(
+                "Rejecting validated Entra token because it contains no supported email or UPN claim.");
             context.Fail("Entra ID token did not contain an email/UPN claim.");
             return;
         }
 
         var displayName = principal.FindFirst("name")?.Value ?? principal.FindFirst(ClaimTypes.Name)?.Value;
-        var entraRoles = principal.FindAll(roleClaimType).Select(c => c.Value).ToArray();
+        var entraRoles = EntraGroupRoleResolver.ResolveRoles(principal, options);
 
         var provisioningService = context.HttpContext.RequestServices
             .GetRequiredService<IEntraUserProvisioningService>();
@@ -42,15 +49,39 @@ public static class EntraTokenClaimsNormalizer
 
         if (localUser == null)
         {
-            context.Fail("No matching Admin/Supervisor/Tagger app role assigned in Entra ID, or the account is deactivated.");
+            logger.LogWarning(
+                "Rejecting validated Entra token because no active local user could be provisioned. " +
+                "Confirm the token has an assigned {RoleClaimType} app role or a configured {GroupClaimType} group mapping.",
+                options.RoleClaimType,
+                options.GroupClaimType);
+            context.Fail("No matching application role or group mapping was found, or the account is deactivated.");
             return;
         }
 
-        var identity = new ClaimsIdentity(context.Scheme.Name);
-        identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, localUser.Id.ToString()));
-        identity.AddClaim(new Claim(ClaimTypes.Name, localUser.Username));
-        identity.AddClaim(new Claim(ClaimTypes.Email, localUser.Email));
-        identity.AddClaim(new Claim(ClaimTypes.Role, localUser.Role));
-        principal.AddIdentity(identity);
+        AddLocalApplicationIdentity(principal, localUser.Id, localUser.Username, localUser.Email, localUser.Role, context.Scheme.Name);
+    }
+
+    internal static void AddLocalApplicationIdentity(
+        ClaimsPrincipal principal,
+        int userId,
+        string username,
+        string email,
+        string role,
+        string authenticationType)
+    {
+        foreach (var identity in principal.Identities)
+        {
+            foreach (var claim in identity.FindAll(ClaimTypes.NameIdentifier).ToArray())
+            {
+                identity.TryRemoveClaim(claim);
+            }
+        }
+
+        var applicationIdentity = new ClaimsIdentity(authenticationType);
+        applicationIdentity.AddClaim(new Claim(ClaimTypes.NameIdentifier, userId.ToString()));
+        applicationIdentity.AddClaim(new Claim(ClaimTypes.Name, username));
+        applicationIdentity.AddClaim(new Claim(ClaimTypes.Email, email));
+        applicationIdentity.AddClaim(new Claim(ClaimTypes.Role, role));
+        principal.AddIdentity(applicationIdentity);
     }
 }
