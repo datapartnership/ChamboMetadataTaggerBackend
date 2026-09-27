@@ -17,6 +17,6 @@ public interface IFileService
     Task<bool> CompleteFileTaggingAsync(int fileId, int userId);
     Task<PagedResponse<TaggingProgressDto>> GetTaggingProgressAsync(PaginationParams pagination);
     Task<PagedResponse<FileMetadataDto>> GetUnassignedFilesAsync(PaginationParams pagination);
-    Task<int> SyncFilesFromBlobStorageAsync();
+    Task<SyncBlobFilesResponse> SyncFilesFromBlobStorageAsync();
     Task<bool> UpdateAudioMetadataAsync(int fileId, double durationSeconds);
 }

@@ -8,10 +8,22 @@ namespace MetadataTagging.Services;
 public class SupervisorService : ISupervisorService
 {
     private readonly ApplicationDbContext _context;
+    private readonly CatalogTagPublisher _publisher;
 
-    public SupervisorService(ApplicationDbContext context)
+    public SupervisorService(ApplicationDbContext context, CatalogTagPublisher publisher)
     {
         _context = context;
+        _publisher = publisher;
+    }
+
+    private async Task PublishAsync(int fileId)
+    {
+        var blobName = await _context.FileMetadata
+            .Where(f => f.Id == fileId)
+            .Select(f => f.BlobName)
+            .FirstOrDefaultAsync();
+        if (blobName != null)
+            await _publisher.ApplyAsync([blobName]);
     }
 
     public async Task<bool> AssignStudentToSupervisorAsync(int studentId, int supervisorId, int adminId)
@@ -383,6 +395,7 @@ public class SupervisorService : ISupervisorService
         file.Status = FileTaggingStatus.ApprovedBySupervisor;
 
         await _context.SaveChangesAsync();
+        await PublishAsync(fileId);
         return true;
     }
 
@@ -422,6 +435,7 @@ public class SupervisorService : ISupervisorService
         file.TaggingCompletedAt = null;
 
         await _context.SaveChangesAsync();
+        await PublishAsync(fileId);
         return true;
     }
 
@@ -464,6 +478,7 @@ public class SupervisorService : ISupervisorService
         assignment.SupervisorNotes = notes;
 
         await _context.SaveChangesAsync();
+        await PublishAsync(fileId);
         return true;
     }
 }

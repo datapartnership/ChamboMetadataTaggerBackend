@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.StaticFiles;
+
 namespace MetadataTagging.Models;
 
 public enum FileCategory
@@ -109,6 +111,22 @@ public static class FileCategoryHelper
         var ext = Path.GetExtension(fileName);
         return !string.IsNullOrEmpty(ext) && AudioExtensions.Contains(ext);
     }
+
+    private static readonly FileExtensionContentTypeProvider ContentTypes = CreateContentTypeProvider();
+
+    private static FileExtensionContentTypeProvider CreateContentTypeProvider()
+    {
+        var provider = new FileExtensionContentTypeProvider();
+        provider.Mappings[".md"] = "text/markdown";
+        provider.Mappings[".flac"] = "audio/flac";
+        provider.Mappings[".opus"] = "audio/opus";
+        provider.Mappings[".m4a"] = "audio/mp4";
+        return provider;
+    }
+
+    /// <summary>MIME type inferred from the file extension, or <c>application/octet-stream</c>.</summary>
+    public static string GetContentType(string fileName) =>
+        ContentTypes.TryGetContentType(fileName, out var contentType) ? contentType : "application/octet-stream";
 
     public static string[] SupportedAudioExtensions => AudioExtensions.ToArray();
     public static string[] SupportedAudioContentTypes => AudioContentTypes.ToArray();

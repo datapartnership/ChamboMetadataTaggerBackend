@@ -16,7 +16,7 @@ public class AdminController : ControllerBase
 {
     private readonly IUserService _userService;
     private readonly IFileService _fileService;
-    private readonly IStorageService _blobService;
+    private readonly IFileStorageService _storage;
     private readonly ISupervisorService _supervisorService;
     private readonly ILogger<AdminController> _logger;
     private readonly ApplicationDbContext _dbContext;
@@ -24,17 +24,59 @@ public class AdminController : ControllerBase
     public AdminController(
         IUserService userService,
         IFileService fileService,
-        IStorageService blobService,
+        IFileStorageService storage,
         ISupervisorService supervisorService,
         ILogger<AdminController> logger,
         ApplicationDbContext dbContext)
     {
         _userService = userService;
         _fileService = fileService;
-        _blobService = blobService;
+        _storage = storage;
         _supervisorService = supervisorService;
         _logger = logger;
         _dbContext = dbContext;
+    }
+
+    /// <summary>
+    /// Imports files, tags and tagging assignments from a plain-SQL pg_dump of the old
+    /// database, attributing all taggings to <paramref name="taggerEmail"/> and all
+    /// assignments/approvals to <paramref name="approverEmail"/>. Replaces existing files,
+    /// assignments and tags.
+    /// </summary>
+    /// <remarks>
+    ///     curl -X POST https://host/api/admin/import-taggings -H "Authorization: Bearer $TOKEN" \
+    ///       -F dump=@old-prod.sql -F taggerEmail=tagger@example.com -F approverEmail=admin@example.com
+    /// </remarks>
+    [HttpPost("import-taggings")]
+    [RequestSizeLimit(1024L * 1024 * 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 1024L * 1024 * 1024)]
+    public async Task<ActionResult<ApiResponse<TaggingImportResult>>> ImportTaggings(
+        IFormFile dump,
+        [FromForm] string taggerEmail,
+        [FromForm] string approverEmail,
+        [FromServices] TaggingImportService importService,
+        CancellationToken ct)
+    {
+        if (dump == null || dump.Length == 0)
+            return BadRequest(ApiResponse<TaggingImportResult>.ErrorResponse("A dump file is required."));
+        if (string.IsNullOrWhiteSpace(taggerEmail) || string.IsNullOrWhiteSpace(approverEmail))
+            return BadRequest(ApiResponse<TaggingImportResult>.ErrorResponse("taggerEmail and approverEmail are required."));
+
+        try
+        {
+            await using var stream = dump.OpenReadStream();
+            var result = await importService.ImportAsync(stream, taggerEmail, approverEmail, ct);
+            return Ok(ApiResponse<TaggingImportResult>.SuccessResponse(result));
+        }
+        catch (FormatException ex)
+        {
+            return BadRequest(ApiResponse<TaggingImportResult>.ErrorResponse(ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error occurred while importing taggings from {FileName}", dump.FileName);
+            return StatusCode(500, ApiResponse<TaggingImportResult>.ErrorResponse($"An error occurred: {ex.Message}"));
+        }
     }
 
     [HttpGet("users")]
@@ -198,7 +240,10 @@ public class AdminController : ControllerBase
         pagination ??= new PaginationParams();
         try
         {
-            var allBlobs = (await _blobService.ListBlobsAsync(prefix: folder)).ToList();
+            var allBlobs = (await _storage.ListFilesAsync(folder ?? ""))
+                .Where(e => CatalogKey.IsCollectionContent(e.Key))
+                .Select(FileService.ToBlobFile)
+                .ToList();
 
             IEnumerable<BlobFileDto> sorted = pagination.SortBy?.ToLowerInvariant() switch
             {
@@ -243,18 +288,19 @@ public class AdminController : ControllerBase
     {
         try
         {
-            if (!await _blobService.BlobExistsAsync(blobName))
+            var entry = await _storage.GetEntryAsync(blobName);
+            if (entry == null)
             {
                 return NotFound(ApiResponse<FilePreviewDto>.ErrorResponse($"Blob '{blobName}' not found"));
             }
 
-            var previewUrl = await _blobService.GetBlobSasUrlAsync(blobName, expiryMinutes);
-            var blobUrl = await _blobService.GetBlobUrlAsync(blobName);
+            var previewUrl = await _storage.GetReadUrlAsync(blobName, TimeSpan.FromMinutes(expiryMinutes));
+            if (previewUrl == null)
+            {
+                return BadRequest(ApiResponse<FilePreviewDto>.ErrorResponse(FileService.PreviewUnavailableMessage));
+            }
 
-            var blobs = await _blobService.ListBlobsAsync();
-            var blobInfo = blobs.FirstOrDefault(b => b.BlobName == blobName);
-
-            var contentType = blobInfo?.ContentType;
+            var contentType = FileCategoryHelper.GetContentType(blobName);
             var preview = new FilePreviewDto
             {
                 FileId = 0,
@@ -262,7 +308,7 @@ public class AdminController : ControllerBase
                 BlobName = blobName,
                 PreviewUrl = previewUrl,
                 ExpiresAt = DateTime.UtcNow.AddMinutes(expiryMinutes),
-                FileSize = blobInfo?.FileSize ?? 0,
+                FileSize = entry.Size,
                 ContentType = contentType,
                 FileCategory = FileCategoryHelper.FromContentType(contentType, blobName).ToString()
             };
@@ -286,19 +332,10 @@ public class AdminController : ControllerBase
     {
         try
         {
-            var blobs = await _blobService.ListBlobsAsync();
-            var totalBlobs = blobs.Count();
-            var importedCount = await _fileService.SyncFilesFromBlobStorageAsync();
-
-            var response = new SyncBlobFilesResponse
-            {
-                TotalBlobs = totalBlobs,
-                ImportedFiles = importedCount,
-                ExistingFiles = totalBlobs - importedCount
-            };
+            var response = await _fileService.SyncFilesFromBlobStorageAsync();
 
             return Ok(ApiResponse<SyncBlobFilesResponse>.SuccessResponse(response,
-                $"Synced {importedCount} new files from blob storage"));
+                $"Synced {response.ImportedFiles} new files from blob storage"));
         }
         catch (Exception ex)
         {
@@ -391,7 +428,11 @@ public class AdminController : ControllerBase
                 return BadRequest(ApiResponse<FilePreviewDto>.ErrorResponse("File has no associated blob"));
             }
 
-            var previewUrl = await _blobService.GetBlobSasUrlAsync(file.BlobName, expiryMinutes);
+            var previewUrl = await _storage.GetReadUrlAsync(file.BlobName, TimeSpan.FromMinutes(expiryMinutes));
+            if (previewUrl == null)
+            {
+                return BadRequest(ApiResponse<FilePreviewDto>.ErrorResponse(FileService.PreviewUnavailableMessage));
+            }
 
             var preview = new FilePreviewDto
             {
@@ -458,16 +499,7 @@ public class AdminController : ControllerBase
                 return BadRequest("File has no associated blob");
             }
 
-            var rangeHeader = Request.Headers.Range.FirstOrDefault();
-
-            if (!string.IsNullOrEmpty(rangeHeader))
-            {
-                return await HandleRangeRequest(file.BlobName, file.ContentType ?? "application/octet-stream", rangeHeader);
-            }
-
-            var (content, contentType, contentLength) = await _blobService.DownloadBlobAsync(file.BlobName);
-            Response.Headers.AcceptRanges = "bytes";
-            return File(content, contentType, enableRangeProcessing: false);
+            return await this.StreamStorageFileAsync(_storage, file.BlobName, HttpContext.RequestAborted);
         }
         catch (FileNotFoundException)
         {
@@ -654,15 +686,17 @@ public class AdminController : ControllerBase
     }
 
     [HttpPost("clear-assignments")]
-    public async Task<ActionResult<ApiResponse<bool>>> ClearAssignments()
+    public async Task<ActionResult<ApiResponse<bool>>> ClearAssignments([FromServices] CatalogTagPublisher publisher)
     {
         try
         {
             _logger.LogWarning("Clear assignments initiated by admin");
 
+            var taggedKeys = await TaggedBlobNamesAsync();
             await _dbContext.FileTags.ExecuteDeleteAsync();
             await _dbContext.FileAssignments.ExecuteDeleteAsync();
             await _dbContext.StudentSupervisors.ExecuteDeleteAsync();
+            await publisher.ApplyAsync(taggedKeys);
 
             _logger.LogWarning("Clear assignments completed successfully");
             return Ok(ApiResponse<bool>.SuccessResponse(true, "All file assignments, taggings, and tagger-supervisor assignments have been cleared."));
@@ -681,16 +715,24 @@ public class AdminController : ControllerBase
         {
             _logger.LogWarning("Database reset initiated by admin");
 
-            await _dbContext.FileTags.ExecuteDeleteAsync();
-            await _dbContext.FileAssignments.ExecuteDeleteAsync();
-            await _dbContext.StudentSupervisors.ExecuteDeleteAsync();
-            await _dbContext.FileMetadata.ExecuteDeleteAsync();
+            var usersTable = _dbContext.Model.FindEntityType(typeof(User))!.GetTableName();
+            var tables = _dbContext.Model.GetEntityTypes()
+                .Select(e => e.GetTableName())
+                .Where(t => t != null && t != usersTable)
+                .Distinct()
+                .Select(t => $"\"{t}\"");
+            var truncateSql = "TRUNCATE TABLE " + string.Join(", ", tables) + " RESTART IDENTITY";
+
+            // Admin accounts are kept so the caller can still sign in afterwards.
+            await using var tx = await _dbContext.Database.BeginTransactionAsync();
+            await _dbContext.Database.ExecuteSqlRawAsync(truncateSql);
             await _dbContext.Users
                 .Where(u => u.Role != UserRoles.Admin)
                 .ExecuteDeleteAsync();
+            await tx.CommitAsync();
 
             _logger.LogWarning("Database reset completed successfully");
-            return Ok(ApiResponse<bool>.SuccessResponse(true, "Database reset successfully. All non-admin data has been cleared."));
+            return Ok(ApiResponse<bool>.SuccessResponse(true, "Database reset successfully. All tables have been emptied except admin users."));
         }
         catch (Exception ex)
         {
@@ -745,35 +787,16 @@ public class AdminController : ControllerBase
         }
     }
 
+    private Task<List<string>> TaggedBlobNamesAsync() =>
+        _dbContext.FileMetadata
+            .Where(f => f.BlobName != null && f.Tags.Any())
+            .Select(f => f.BlobName!)
+            .ToListAsync();
+
     private static string CsvEscape(string value)
     {
         if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
             return $"\"{value.Replace("\"", "\"\"")}\"";
         return value;
-    }
-
-    private async Task<IActionResult> HandleRangeRequest(string blobName, string contentType, string rangeHeader)
-    {
-        var rangeValue = rangeHeader.Replace("bytes=", "");
-        var parts = rangeValue.Split('-');
-
-        if (!long.TryParse(parts[0], out long start))
-        {
-            return BadRequest("Invalid range header");
-        }
-
-        long? end = parts.Length > 1 && !string.IsNullOrEmpty(parts[1]) ? long.Parse(parts[1]) : null;
-        long? length = end.HasValue ? end.Value - start + 1 : null;
-
-        var (content, resolvedContentType, contentLength, totalSize) =
-            await _blobService.DownloadBlobRangeAsync(blobName, start, length);
-
-        var actualEnd = start + contentLength - 1;
-
-        Response.Headers.AcceptRanges = "bytes";
-        Response.Headers.ContentRange = $"bytes {start}-{actualEnd}/{totalSize}";
-        Response.ContentLength = contentLength;
-
-        return StatusCode(206, File(content, resolvedContentType, enableRangeProcessing: false));
     }
 }

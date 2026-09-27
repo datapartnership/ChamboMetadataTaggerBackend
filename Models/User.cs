@@ -35,4 +35,5 @@ public static class UserAuthProviders
 {
     public const string Local = "Local";
     public const string Entra = "Entra";
+    public const string Keycloak = "Keycloak";
 }

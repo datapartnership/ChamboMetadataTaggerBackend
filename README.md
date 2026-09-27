@@ -15,7 +15,7 @@ A complete ASP.NET Web API 8.0 backend solution for managing file metadata taggi
 - **File Assignment System**: Admins can assign blob files directly to taggers
 - **Metadata Tagging**: Taggers can add custom key-value tags to files
 - **Progress Tracking**: Admins can monitor tagging completion status
-- **SQLite Database**: Lightweight database for data persistence
+- **PostgreSQL Database**: Data persistence with schema managed by EF Core Migrations
 
 ## Workflow
 
@@ -52,20 +52,30 @@ MetadataTagging/
 ├── Controllers/
 │   ├── AuthController.cs         # Authentication endpoints
 │   ├── AdminController.cs        # Admin-only endpoints
-│   └── TaggerController.cs       # Tagger-only endpoints
+│   ├── TaggerController.cs       # Tagger-only endpoints
+│   ├── SupervisorController.cs   # Supervisor-only endpoints
+│   ├── CollectionsController.cs  # Catalog API: Croissant query, collection bundle, summary
+│   ├── FilesController.cs        # Catalog API: file download and audio/video bundle
+│   ├── CatalogController.cs      # Catalog API: public collection browser
+│   ├── ApplicationsController.cs # Catalog API: dataset access applications
+│   └── SeedController.cs         # Catalog API: seed/reset catalog tables
 ├── Data/
-│   └── ApplicationDbContext.cs   # Entity Framework DbContext
+│   ├── ApplicationDbContext.cs   # Entity Framework DbContext (shared: tagging + catalog)
+│   └── Migrations/               # EF Core migrations
 ├── DTOs/
 │   ├── ApiResponse.cs            # Standard API response wrapper
 │   ├── AuthDtos.cs               # Authentication DTOs
 │   ├── FileDtos.cs               # File-related DTOs
-│   └── UserDtos.cs               # User-related DTOs
+│   ├── UserDtos.cs               # User-related DTOs
+│   └── ...                       # Catalog API DTOs (CatalogModels, SeedModels, etc.)
 ├── Models/
 │   ├── User.cs                   # User entity
 │   ├── FileMetadata.cs           # File metadata entity
 │   ├── FileAssignment.cs         # File assignment entity
 │   ├── FileTag.cs                # File tag entity
-│   └── AppSettings.cs            # Configuration options classes
+│   ├── AppSettings.cs            # Configuration options classes
+│   └── CollectionModels.cs, CatalogModels.cs
+│                                  # Catalog API entities (Collection, CollectionFile, Keyword, ...)
 ├── Services/
 │   ├── IAuthService.cs           # Authentication service interface
 │   ├── AuthService.cs            # Authentication implementation
@@ -73,10 +83,15 @@ MetadataTagging/
 │   ├── UserService.cs            # User service implementation
 │   ├── IFileService.cs           # File service interface
 │   ├── FileService.cs            # File service implementation
-│   ├── IAzureBlobService.cs      # Azure Blob service interface
-│   └── AzureBlobService.cs       # Azure Blob service implementation
+│   ├── IFileStorageService.cs    # Storage abstraction (Local / S3 / Azure implementations)
+│   ├── CatalogTagPublisher.cs    # Copies ready tagger tags onto catalog files
+│   ├── EntraTokenClaimsNormalizer.cs, KeycloakTokenClaimsNormalizer.cs
+│   │                              # Federated-login → local role claim normalization
+│   └── ...                       # Catalog API services (SeedService, CatalogService, CollectionQueryService, ...)
+├── Swagger/
+│   └── CroissantExampleFilter.cs # Injects a Croissant JSON-LD example into Swagger UI
 ├── Program.cs                    # Application entry point
-├── appsettings.json              # Configuration file
+├── appsettings.json               # Configuration file
 └── MetadataTagging.csproj        # Project file
 ```
 
@@ -85,7 +100,7 @@ MetadataTagging/
 ### Prerequisites
 
 - .NET 8.0 SDK
-- Azure Blob Storage account (for file storage)
+- File storage: Azure Blob Storage, an S3-compatible store, or a local folder (`CatalogStorage`)
 - Visual Studio 2022 or VS Code
 
 ### Configuration
@@ -98,14 +113,18 @@ Copy `.env.example` to `.env` and fill in your values. ASP.NET Core maps environ
 
 | Environment Variable | Description | Required |
 |---|---|---|
-| `DatabaseProvider` | Database backend: `sqlite` (default) or `postgresql` | No (default: `sqlite`) |
+| `Database__Host` | PostgreSQL host | **Yes** |
+| `Database__Port` | PostgreSQL port | No (default: `5432`) |
+| `Database__Name` | PostgreSQL database name | **Yes** |
+| `Database__Username` | PostgreSQL user | **Yes** |
+| `Database__Password` | PostgreSQL password (not used with managed identity) | When not using managed identity |
+| `Database__UseManagedIdentity` | Authenticate to Azure Database for PostgreSQL with a managed identity token | No (default: `false`) |
+| `Database__ManagedIdentityClientId` | Client ID of a user-assigned managed identity | No |
 | `JwtSettings__SecretKey` | JWT signing secret (min. 32 characters) | **Yes** |
 | `JwtSettings__Issuer` | JWT issuer identifier | No (default: `MetadataTaggingAPI`) |
 | `JwtSettings__Audience` | JWT audience identifier | No (default: `MetadataTaggingClient`) |
 | `JwtSettings__ExpiryMinutes` | Token expiry in minutes | No (default: `480`) |
-| `AzureStorage__ConnectionString` | Azure Blob Storage connection string | **Yes** |
-| `AzureStorage__ContainerName` | Azure Blob Storage container name | No (default: `files`) |
-| `ConnectionStrings__PostgreSQLConnection` | PostgreSQL connection string (required when `DatabaseProvider=postgresql`) | No |
+| `CatalogStorage__Provider` | File storage: `local`, `s3`, or `azure` (see `.env.example` for each provider's keys) | No (default: `local`) |
 | `DefaultAdmin__Username` | Default admin username | No |
 | `DefaultAdmin__Email` | Default admin email | No |
 | `DefaultAdmin__Password` | Default admin password | No |
@@ -129,11 +148,13 @@ openssl rand -base64 48
 
 ```json
 {
-  "ConnectionStrings": {
-    "DefaultConnection": "Data Source=metadatatagging.db",
-    "PostgreSQLConnection": "Host=localhost;Port=5432;Database=metadatatagging;Username=postgres;Password=yourpassword"
+  "Database": {
+    "Host": "localhost",
+    "Port": 5432,
+    "Name": "metadatatagging",
+    "Username": "postgres",
+    "Password": "yourpassword"
   },
-  "DatabaseProvider": "sqlite",
   "JwtSettings": {
     "SecretKey": "your-secret-key-here-min-32-characters-long-change-in-production",
     "Issuer": "MetadataTaggingAPI",
@@ -182,7 +203,7 @@ dotnet run
 
 ### Database
 
-The SQLite database will be automatically created on first run. A default admin user is automatically created based on the `DefaultAdmin` configuration in `appsettings.json`:
+A PostgreSQL database is required. The schema is applied automatically on startup by EF Core Migrations. A default admin user is automatically created based on the `DefaultAdmin` configuration in `appsettings.json`:
 
 - **Email**: `admin@metadatatagging.com` (configurable)
 - **Username**: `admin` (configurable)
@@ -247,6 +268,122 @@ Login with email and password
 - `GET /api/tagger/files/{fileId}/preview` - Get secure preview URL for assigned file
 - `POST /api/tagger/files/{fileId}/tags` - Add tags to file
 - `POST /api/tagger/files/{fileId}/complete` - Mark file tagging as complete
+
+## Catalog API (merged from the Low Resource Language Library API)
+
+This backend also serves the public Low Resource Language Library (LRLL) catalog API,
+which returns **Croissant 1.0 JSON-LD** for text, audio, and video collections sourced from a
+shared database with this app's own file-tagging tables. It uses **this app's existing
+authentication** (local email/password JWT, plus optional Entra ID and Keycloak) instead of
+its own former Azure AD-group/Keycloak-role scheme.
+
+### Authorization
+
+Catalog endpoints use two policies, mapped onto Chambo's Admin/Supervisor/Tagger roles:
+
+- **`Read`**: any authenticated user (Admin, Supervisor, or Tagger).
+- **`Write`**: Admin only.
+
+Public/anonymous endpoints (health checks, summaries, the CKAN-style catalog browser, and
+dataset-access application submission) remain unauthenticated.
+
+### Storage layout and seeding
+
+All catalog content lives in a single `CatalogStorage` location laid out as
+`{Provider}/{CollectionFolder}/...`, e.g. `Radio Maria/BIBLE QUIZ/...`. Every collection folder
+becomes one `Collections` row and every file one `CollectionFiles` row. Path segments starting
+with `.` (e.g. checkpoint folders) are ignored. The media type is inferred from the folder's
+contents:
+
+- **Audio / Video** — the folder contains a Croissant `*_metadata.jsonld` file, anywhere inside
+  it (the shallowest one wins). Its `distribution` lists the media files, which may sit in
+  subfolders (e.g. `National Statistics Office/NSO_verbatim_Round1/1367_combined/...`);
+  `.txt` / `text/*` entries are transcriptions, paired with the media file of the same stem
+  (`ep01.flac` ↔ `ep01.txt` or `ep01.flac.txt`). The collection is Video if any listed file is
+  video, otherwise Audio. Each entry's `sc:contentUrl` gives its path; if that file isn't in
+  storage, the only file in the collection with the same name is used instead.
+- **Text** — no metadata file. PDF/TXT/MD files are discovered by scanning the folder.
+
+### From tagging to the catalog
+
+Taggers work on the same `CatalogStorage` files the catalog serves, so a tagged file's
+`FileMetadata.BlobName` is exactly its `CollectionFiles.ContentUrl` (both stored without a
+leading `./` or `/`). The admin blob list only offers files inside a `Provider/Collection/` folder
+that the seed can catalog (hidden files and `*_metadata.jsonld` are skipped).
+
+Tags from submitted or approved files are applied to the matching catalog file: keywords,
+themes and author for every media type, plus the title as the display name of text files.
+Collection-level keywords and themes are recomputed from their files. This happens both during
+`POST /api/seed` and immediately whenever a tagger submits, or a supervisor approves, edits or
+sends back a file (a sent-back file's catalog values revert to what storage provides), so the
+catalog does not wait for a re-seed.
+
+`POST /api/seed` performs a full sync: collections and files get deterministic IDs derived from
+their storage paths (or the jsonld `sc:identifier`), existing rows are updated in place, and rows
+whose files no longer exist in storage are deleted. The response reports added/updated/deleted
+counts per media type plus warnings (unexpected folders, missing jsonld, files listed but not
+found, ...). `taggedFilesNotCataloged` counts submitted/approved tagger files that match no
+catalog file (unsupported extension, outside the layout, or missing from storage).
+
+### Endpoints
+
+- `POST /api/seed` (Write) — scan storage and sync the catalog tables. It does not touch this
+  app's own Users/FileMetadata/FileAssignments/FileTags/StudentSupervisors tables.
+- `POST /api/admin/reset-database` (Admin) — empty every table (tagging and catalog) except
+  admin users.
+- `GET /api/catalog/collections`, `/{id}`, `/{id}/files`, `/facets` (anonymous) — paginated
+  collection browser data.
+- `GET /api/collections/query` (Read) — Croissant JSON-LD query across collections, filterable
+  by `mediaType`, `collectionId`, `provider`, `language`, `keyword`, `theme`, `author`, `year`.
+  Media file entries carry their transcription as `ddpv:transcription` plus a `ddpv:bundleUrl`;
+  audio/video collection nodes carry their own `ddpv:bundleUrl`.
+- `GET /api/collections/{id}/bundle` (Read) — whole audio/video collection (every media file,
+  its transcription, and a `metadata.jsonld`) as a streamed ZIP. Not available for text.
+- `GET /api/collections/summary`, `/health` (anonymous) — aggregate summary and health check.
+- `GET /api/files/{id}` (Read) — download a file. Text (TXT/MD, and the text extracted from
+  PDFs) is returned as shuffled paragraphs and counts toward `RateLimit:DailyFileDownloadLimit`;
+  audio/video are streamed as-is.
+- `GET /api/files/{id}/bundle` (Read) — an audio/video file together with its transcription as
+  a ZIP.
+- `POST /api/applications` (anonymous) / `GET /api/applications` (Write) — dataset access
+  application intake and review.
+
+### Configuration
+
+New `appsettings.json` sections added for the catalog API (see `.env.example` for the full
+list of environment-variable equivalents):
+
+- `Keycloak` — optional third auth scheme, alongside Local JWT and Entra ID. Configure
+  `Keycloak:Authority` to enable it. `Keycloak:RoleMappings` maps Keycloak client roles
+  (`resource_access[ClientId].roles`) onto `Admin`/`Supervisor`/`Tagger`, the same way
+  `EntraId:GroupRoleMappings` does for Entra ID groups.
+- `CatalogStorage` — the only file storage (local disk, S3-compatible, or Azure Blob Storage),
+  a single location using the layout described above, shared by the tagging workflow and the
+  catalog API. The former `Storage` section (tagging inbox) has been removed.
+- `RateLimit` — daily per-user file download cap for the catalog API (`0` = unlimited).
+
+### Database and migrations
+
+The catalog API's tables (`Collections`, `CollectionFiles`, `Keywords`, `Themes`,
+`DatasetAccessApplications`, `FileDownloadLogs`) live in
+the same `ApplicationDbContext`/database as this app's own tables, and share its `FileMetadata`/
+`FileTags` tables directly (no separate read-only "tagger database" connection is used anymore).
+
+Schema is now managed via **EF Core Migrations** instead of `EnsureCreated()`. The
+`InitialBaseline` migration captures the complete merged schema (this app's pre-existing
+tables plus the new catalog tables) as of the merge.
+
+> **Moving from a pre-migrations database** (one created via `EnsureCreated()`, which fails
+> startup with `relation "FileMetadata" already exists`):
+> 1. Deploy once with `Database__ResetOnStartup=true`. On startup every table is dropped and the
+>    schema is rebuilt from the migrations. **Set it back to `false` straight after**; while it is
+>    `true`, every restart wipes all data.
+> 2. Sign in as an Admin and post a plain-SQL `pg_dump` of the old database to
+>    `POST /api/admin/import-taggings` (multipart: `dump`, `taggerEmail`, `approverEmail`).
+>    Files, tags and assignments are imported with their original ids; all taggings are
+>    attributed to `taggerEmail` and all assignments/approvals to `approverEmail` (both users are
+>    created if missing and taken over on their first Entra ID sign-in). Old users and
+>    student/supervisor links are not imported, and one assignment is kept per file.
 
 ## Usage Examples
 
@@ -505,7 +642,7 @@ const markdownText = await markdownResponse.text();
 
 - ASP.NET Core 8.0 Web API
 - Entity Framework Core 8.0
-- SQLite
+- PostgreSQL (Npgsql)
 - JWT Bearer Authentication
 - Azure Storage Blobs SDK
 - BCrypt.Net for password hashing
