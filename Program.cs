@@ -523,34 +523,50 @@ using (var scope = app.Services.CreateScope())
 }
 
 
+// Security response headers, applied to every response (including CORS preflights and errors).
+// HSTS is set manually rather than via UseHsts(): TLS terminates upstream on App Service.
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    // Swagger UI (Development only) needs inline scripts/styles, so skip the strict CSP there.
+    if (!context.Request.Path.StartsWithSegments("/swagger"))
+        headers["Content-Security-Policy"] = "default-src 'self';";
+    headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload";
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["X-Frame-Options"] = "SAMEORIGIN";
+    headers["X-XSS-Protection"] = "1; mode=block";
+    headers["Referrer-Policy"] = "no-referrer-when-downgrade";
+    await next();
+});
+
 //let's serve the fronted in another service
 //app.UseStaticFiles();
 
-// Swagger is available in all environments (not just Development): the merged app also
-// serves the public LRLL catalog API, whose consumers rely on Swagger UI in production
-// for the OAuth2 Authorization Code + PKCE sign-in flow. Endpoints still require the
-// same authentication/authorization as ordinary requests.
-app.UseSwagger();
-app.UseSwaggerUI(c =>
+// Swagger is Development-only: its UI is incompatible with the strict CSP above.
+if (app.Environment.IsDevelopment())
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Metadata Tagging API v1");
-    c.DefaultModelsExpandDepth(-1); // hide schema section by default
-    c.DisplayRequestDuration();
-    if (authOptions.IsEntraId)
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
     {
-        c.OAuthClientId(entraIdOptions.ClientId);
-        c.OAuthScopes($"{entraIdOptions.Audience}/user_impersonation");
-        c.OAuthUsePkce();
-    }
-    if (authOptions.IsKeycloak)
-    {
-        // Allows Swagger UI to pick up the Keycloak client when 'keycloak-oauth2' is selected.
-        c.OAuthAdditionalQueryStringParams(new Dictionary<string, string>
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Metadata Tagging API v1");
+        c.DefaultModelsExpandDepth(-1); // hide schema section by default
+        c.DisplayRequestDuration();
+        if (authOptions.IsEntraId)
         {
-            ["kc_client_id"] = keycloakOptions.ClientId
-        });
-    }
-});
+            c.OAuthClientId(entraIdOptions.ClientId);
+            c.OAuthScopes($"{entraIdOptions.Audience}/user_impersonation");
+            c.OAuthUsePkce();
+        }
+        if (authOptions.IsKeycloak)
+        {
+            // Allows Swagger UI to pick up the Keycloak client when 'keycloak-oauth2' is selected.
+            c.OAuthAdditionalQueryStringParams(new Dictionary<string, string>
+            {
+                ["kc_client_id"] = keycloakOptions.ClientId
+            });
+        }
+    });
+}
 
 app.UseCors("AllowAll");
 
