@@ -232,54 +232,74 @@ public class AdminController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Lists the immediate children of <paramref name="folder"/> (sub-folders first, then files),
+    /// paged over those children.
+    /// </summary>
     [HttpGet("blobs")]
-    public async Task<ActionResult<ApiResponse<PagedResponse<BlobFileDto>>>> GetAllBlobs(
+    public async Task<ActionResult<ApiResponse<FolderPagedResponse<BlobFileDto>>>> GetAllBlobs(
         [FromQuery] string? folder = null,
         [FromQuery] PaginationParams? pagination = null)
     {
         pagination ??= new PaginationParams();
         try
         {
-            var allBlobs = (await _storage.ListFilesAsync(folder ?? ""))
+            var dir = FolderListing.NormalizeFolder(folder);
+            var allBlobs = (await _storage.ListFilesAsync(dir))
                 .Where(e => CatalogKey.IsCollectionContent(e.Key))
                 .Select(FileService.ToBlobFile)
                 .ToList();
 
+            var (folders, files) = FolderListing.Split(allBlobs, b => b.BlobName, dir);
+
             IEnumerable<BlobFileDto> sorted = pagination.SortBy?.ToLowerInvariant() switch
             {
                 "blobname" => pagination.IsDescending
-                    ? allBlobs.OrderByDescending(b => b.BlobName)
-                    : allBlobs.OrderBy(b => b.BlobName),
+                    ? files.OrderByDescending(b => b.BlobName)
+                    : files.OrderBy(b => b.BlobName),
                 "filesize" => pagination.IsDescending
-                    ? allBlobs.OrderByDescending(b => b.FileSize)
-                    : allBlobs.OrderBy(b => b.FileSize),
+                    ? files.OrderByDescending(b => b.FileSize)
+                    : files.OrderBy(b => b.FileSize),
                 "lastmodified" => pagination.IsDescending
-                    ? allBlobs.OrderByDescending(b => b.LastModified)
-                    : allBlobs.OrderBy(b => b.LastModified),
+                    ? files.OrderByDescending(b => b.LastModified)
+                    : files.OrderBy(b => b.LastModified),
                 "contenttype" => pagination.IsDescending
-                    ? allBlobs.OrderByDescending(b => b.ContentType)
-                    : allBlobs.OrderBy(b => b.ContentType),
+                    ? files.OrderByDescending(b => b.ContentType)
+                    : files.OrderBy(b => b.ContentType),
                 "filecategory" => pagination.IsDescending
-                    ? allBlobs.OrderByDescending(b => b.FileCategory)
-                    : allBlobs.OrderBy(b => b.FileCategory),
-                _ => allBlobs.OrderBy(b => b.BlobName)
+                    ? files.OrderByDescending(b => b.FileCategory)
+                    : files.OrderBy(b => b.FileCategory),
+                _ => files.OrderBy(b => b.BlobName)
             };
 
-            var sortedList = sorted.ToList();
-            var pagedResult = new PagedResponse<BlobFileDto>
+            var (pageFolders, pageFiles) = FolderListing.Page(folders, sorted.ToList(), pagination.Page, pagination.PageSize);
+            var items = pageFolders
+                .Select(f => new BlobFileDto
+                {
+                    BlobName = f.Path,
+                    FileUrl = "",
+                    IsDirectory = true,
+                    FileCount = f.FileCount
+                })
+                .Concat(pageFiles)
+                .ToList();
+
+            var pagedResult = new FolderPagedResponse<BlobFileDto>
             {
-                Items = sortedList.Skip((pagination.Page - 1) * pagination.PageSize).Take(pagination.PageSize),
+                Items = items,
                 Page = pagination.Page,
                 PageSize = pagination.PageSize,
-                TotalCount = sortedList.Count
+                TotalCount = folders.Count + files.Count,
+                Folder = dir,
+                TotalFileCount = allBlobs.Count
             };
 
-            return Ok(ApiResponse<PagedResponse<BlobFileDto>>.SuccessResponse(pagedResult));
+            return Ok(ApiResponse<FolderPagedResponse<BlobFileDto>>.SuccessResponse(pagedResult));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error occurred while getting all blobs");
-            return StatusCode(500, ApiResponse<PagedResponse<BlobFileDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<FolderPagedResponse<BlobFileDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 
@@ -359,18 +379,24 @@ public class AdminController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Lists the unassigned files' immediate children of <paramref name="folder"/> (sub-folders first,
+    /// then files), paged over those children.
+    /// </summary>
     [HttpGet("files/unassigned")]
-    public async Task<ActionResult<ApiResponse<PagedResponse<FileMetadataDto>>>> GetUnassignedFiles([FromQuery] PaginationParams pagination)
+    public async Task<ActionResult<ApiResponse<FolderPagedResponse<FileMetadataDto>>>> GetUnassignedFiles(
+        [FromQuery] PaginationParams pagination,
+        [FromQuery] string? folder = null)
     {
         try
         {
-            var files = await _fileService.GetUnassignedFilesAsync(pagination);
-            return Ok(ApiResponse<PagedResponse<FileMetadataDto>>.SuccessResponse(files));
+            var files = await _fileService.GetUnassignedFilesAsync(pagination, folder);
+            return Ok(ApiResponse<FolderPagedResponse<FileMetadataDto>>.SuccessResponse(files));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error occurred while getting unassigned files");
-            return StatusCode(500, ApiResponse<PagedResponse<FileMetadataDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
+            return StatusCode(500, ApiResponse<FolderPagedResponse<FileMetadataDto>>.ErrorResponse($"An error occurred: {ex.Message}"));
         }
     }
 

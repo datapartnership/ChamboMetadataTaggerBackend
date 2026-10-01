@@ -38,6 +38,43 @@ public class FileServiceAssignedCountTests
         Assert.All(unassigned.Items, f => Assert.Equal(nameof(FileTaggingStatus.Unassigned), f.Status));
     }
 
+    [Fact]
+    public async Task Unassigned_ListsFolderChildren_AndPagesOverThem()
+    {
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        await context.Database.EnsureCreatedAsync();
+        context.FileMetadata.AddRange(
+            CreateFile("ProvA/Col1/a.wav", FileTaggingStatus.Unassigned),
+            CreateFile("ProvA/Col1/b.wav", FileTaggingStatus.Unassigned),
+            CreateFile("ProvA/Col2/c.wav", FileTaggingStatus.Unassigned),
+            CreateFile("ProvB/Col1/d.wav", FileTaggingStatus.Unassigned),
+            CreateFile("ProvB/Col1/e.wav", FileTaggingStatus.Assigned));
+        context.SaveChanges();
+
+        var service = new FileService(context, new StubStorageService(), new CatalogTagPublisher(context));
+
+        var root = await service.GetUnassignedFilesAsync(new PaginationParams { Page = 1, PageSize = 1 });
+        Assert.Equal(2, root.TotalCount);
+        Assert.Equal(2, root.TotalPages);
+        Assert.Equal(4, root.TotalFileCount);
+        var first = Assert.Single(root.Items);
+        Assert.True(first.IsDirectory);
+        Assert.Equal("ProvA/", first.BlobName);
+        Assert.Equal(3, first.FileCount);
+
+        var col1 = await service.GetUnassignedFilesAsync(new PaginationParams { Page = 1, PageSize = 25, SortBy = "fileName" }, "ProvA/Col1");
+        Assert.Equal("ProvA/Col1/", col1.Folder);
+        Assert.Equal(["ProvA/Col1/a.wav", "ProvA/Col1/b.wav"], col1.Items.Select(f => f.BlobName));
+        Assert.All(col1.Items, f => Assert.False(f.IsDirectory));
+    }
+
     private static void SeedFiles(ApplicationDbContext context)
     {
         context.FileMetadata.AddRange(

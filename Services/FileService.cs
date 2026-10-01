@@ -516,43 +516,68 @@ public class FileService : IFileService
         };
     }
 
-    public async Task<PagedResponse<FileMetadataDto>> GetUnassignedFilesAsync(PaginationParams pagination)
+    public async Task<FolderPagedResponse<FileMetadataDto>> GetUnassignedFilesAsync(PaginationParams pagination, string? folder = null)
     {
-        IQueryable<FileMetadata> query = _context.FileMetadata
+        var dir = FolderListing.NormalizeFolder(folder);
+
+        // Only the columns needed to build the folder tree and sort; full rows are loaded for the page.
+        var rows = await _context.FileMetadata
             .Where(f => f.Status == FileTaggingStatus.Unassigned)
-            .Include(f => f.Tags);
-
-        query = pagination.SortBy?.ToLowerInvariant() switch
-        {
-            "filename" => pagination.IsDescending
-                ? query.OrderByDescending(f => f.FileName)
-                : query.OrderBy(f => f.FileName),
-            "filesize" => pagination.IsDescending
-                ? query.OrderByDescending(f => f.FileSize)
-                : query.OrderBy(f => f.FileSize),
-            "contenttype" => pagination.IsDescending
-                ? query.OrderByDescending(f => f.ContentType)
-                : query.OrderBy(f => f.ContentType),
-            _ => pagination.IsDescending
-                ? query.OrderByDescending(f => f.UploadedAt)
-                : query.OrderBy(f => f.UploadedAt),
-        };
-
-        var totalCount = await query.CountAsync();
-
-        var files = await query
-            .Skip((pagination.Page - 1) * pagination.PageSize)
-            .Take(pagination.PageSize)
+            .Select(f => new UnassignedRow(f.Id, f.BlobName ?? f.FileName, f.FileName, f.FileSize, f.ContentType, f.UploadedAt))
             .ToListAsync();
 
-        return new PagedResponse<FileMetadataDto>
+        var inFolder = rows.Where(r => CatalogKey.Normalize(r.Key).StartsWith(dir, StringComparison.Ordinal)).ToList();
+        var (folders, files) = FolderListing.Split(inFolder, r => r.Key, dir);
+
+        IEnumerable<UnassignedRow> sorted = pagination.SortBy?.ToLowerInvariant() switch
         {
-            Items = files.Select(f => MapToDto(f)),
+            "filename" => pagination.IsDescending
+                ? files.OrderByDescending(f => f.FileName)
+                : files.OrderBy(f => f.FileName),
+            "filesize" => pagination.IsDescending
+                ? files.OrderByDescending(f => f.FileSize)
+                : files.OrderBy(f => f.FileSize),
+            "contenttype" => pagination.IsDescending
+                ? files.OrderByDescending(f => f.ContentType)
+                : files.OrderBy(f => f.ContentType),
+            _ => pagination.IsDescending
+                ? files.OrderByDescending(f => f.UploadedAt)
+                : files.OrderBy(f => f.UploadedAt),
+        };
+
+        var (pageFolders, pageFiles) = FolderListing.Page(folders, sorted.ToList(), pagination.Page, pagination.PageSize);
+
+        var pageIds = pageFiles.Select(f => f.Id).ToList();
+        var entities = await _context.FileMetadata
+            .Where(f => pageIds.Contains(f.Id))
+            .Include(f => f.Tags)
+            .ToDictionaryAsync(f => f.Id);
+
+        var items = pageFolders
+            .Select(f => new FileMetadataDto
+            {
+                FileName = f.Name,
+                FileUrl = "",
+                BlobName = f.Path,
+                Status = nameof(FileTaggingStatus.Unassigned),
+                IsDirectory = true,
+                FileCount = f.FileCount
+            })
+            .Concat(pageFiles.Where(f => entities.ContainsKey(f.Id)).Select(f => MapToDto(entities[f.Id])))
+            .ToList();
+
+        return new FolderPagedResponse<FileMetadataDto>
+        {
+            Items = items,
             Page = pagination.Page,
             PageSize = pagination.PageSize,
-            TotalCount = totalCount
+            TotalCount = folders.Count + files.Count,
+            Folder = dir,
+            TotalFileCount = inFolder.Count
         };
     }
+
+    private sealed record UnassignedRow(int Id, string Key, string FileName, long FileSize, string? ContentType, DateTime UploadedAt);
 
     public async Task<bool> UpdateAudioMetadataAsync(int fileId, double durationSeconds)
     {

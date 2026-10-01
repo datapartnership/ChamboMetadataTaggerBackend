@@ -33,3 +33,13 @@ public class PagedResponse<T>
     public bool HasNextPage => Page < TotalPages;
     public bool HasPreviousPage => Page > 1;
 }
+
+/// <summary>
+/// One page of a folder's immediate children. <see cref="PagedResponse{T}.TotalCount"/> counts those
+/// children (sub-folders + direct files); <see cref="TotalFileCount"/> counts every file beneath the folder.
+/// </summary>
+public class FolderPagedResponse<T> : PagedResponse<T>
+{
+    public string Folder { get; set; } = "";
+    public int TotalFileCount { get; set; }
+}
