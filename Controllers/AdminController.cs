@@ -347,6 +347,33 @@ public class AdminController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Streams a blob through the API so the browser can read its content (e.g. markdown previews)
+    /// without needing CORS on the storage account.
+    /// </summary>
+    [HttpGet("blobs/stream")]
+    public async Task<IActionResult> StreamBlob([FromQuery] string blobName)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(blobName))
+            {
+                return BadRequest("blobName is required");
+            }
+
+            return await this.StreamStorageFileAsync(_storage, CatalogKey.Normalize(blobName), HttpContext.RequestAborted);
+        }
+        catch (FileNotFoundException)
+        {
+            return NotFound("Blob not found");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error streaming blob {BlobName}", blobName);
+            return StatusCode(500, "An error occurred while streaming the blob");
+        }
+    }
+
     [HttpPost("sync-blobs")]
     public async Task<ActionResult<ApiResponse<SyncBlobFilesResponse>>> SyncBlobFiles()
     {
