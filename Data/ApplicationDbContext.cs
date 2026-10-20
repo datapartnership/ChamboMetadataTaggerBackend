@@ -16,6 +16,15 @@ public class ApplicationDbContext : DbContext
     public DbSet<FileTag> FileTags { get; set; }
     public DbSet<StudentSupervisor> StudentSupervisors { get; set; }
 
+    // ── Catalog API entities (ported from the LRLL merge) ──────────────────────
+    // Collections and their files are rebuilt from catalog storage by POST /api/seed.
+    public DbSet<Collection> Collections { get; set; }
+    public DbSet<CollectionFile> CollectionFiles { get; set; }
+    public DbSet<Keyword> Keywords { get; set; }
+    public DbSet<Theme> Themes { get; set; }
+    public DbSet<FileDownloadLog> FileDownloadLogs { get; set; }
+    public DbSet<DatasetAccessApplication> DatasetAccessApplications { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -35,6 +44,7 @@ public class ApplicationDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.FileName);
             entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => e.BlobName);
             entity.Property(e => e.FileName).HasMaxLength(500);
             entity.Property(e => e.FileUrl).HasMaxLength(2000);
             entity.Property(e => e.BlobName).HasMaxLength(500);
@@ -95,6 +105,64 @@ public class ApplicationDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.AssignedByUserId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ── Catalog API entities (ported from the LRLL merge) ───────────────────
+        modelBuilder.Entity<Collection>(entity =>
+        {
+            entity.Property(c => c.MediaType).HasConversion<string>().HasMaxLength(20);
+            entity.HasMany(c => c.Files)
+                .WithOne(f => f.Collection)
+                .HasForeignKey(f => f.CollectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(c => c.MediaType).HasDatabaseName("idx_collections_mediatype");
+            entity.HasIndex(c => c.Provider).HasDatabaseName("idx_collections_provider");
+            entity.HasIndex(c => c.LanguageCode).HasDatabaseName("idx_collections_language");
+        });
+
+        modelBuilder.Entity<CollectionFile>(entity =>
+        {
+            entity.Property(f => f.Kind).HasConversion<string>().HasMaxLength(20);
+            entity.HasMany(f => f.Keywords)
+                .WithOne(k => k.File)
+                .HasForeignKey(k => k.FileId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(f => f.Themes)
+                .WithOne(t => t.File)
+                .HasForeignKey(t => t.FileId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(f => f.ContentUrl).IsUnique().HasDatabaseName("idx_collectionfiles_contenturl");
+            entity.HasIndex(f => f.CollectionId).HasDatabaseName("idx_collectionfiles_collection");
+            entity.HasIndex(f => f.Kind).HasDatabaseName("idx_collectionfiles_kind");
+            entity.HasIndex(f => f.Author).HasDatabaseName("idx_collectionfiles_author");
+        });
+
+        modelBuilder.Entity<Keyword>()
+            .HasIndex(k => k.Value).HasDatabaseName("idx_keywords_value");
+        modelBuilder.Entity<Keyword>()
+            .HasIndex(k => k.FileId).HasDatabaseName("idx_keywords_file");
+
+        modelBuilder.Entity<Theme>()
+            .HasIndex(t => t.Value).HasDatabaseName("idx_themes_value");
+        modelBuilder.Entity<Theme>()
+            .HasIndex(t => t.FileId).HasDatabaseName("idx_themes_file");
+
+        // ── Rate limiting ─────────────────────────────────────────────────────
+        modelBuilder.Entity<FileDownloadLog>()
+            .HasKey(l => new { l.UserId, l.Date });
+
+        modelBuilder.Entity<DatasetAccessApplication>(entity =>
+        {
+            entity.Property(a => a.FirstName).IsRequired().HasMaxLength(100);
+            entity.Property(a => a.LastName).IsRequired().HasMaxLength(100);
+            entity.Property(a => a.Organization).IsRequired().HasMaxLength(200);
+            entity.Property(a => a.OrganizationEmail).IsRequired().HasMaxLength(254);
+            entity.Property(a => a.JobTitle).IsRequired().HasMaxLength(200);
+            entity.Property(a => a.ProjectDescription).IsRequired().HasMaxLength(5000);
+            entity.Property(a => a.EthicalDataHandling).IsRequired().HasMaxLength(5000);
+            entity.HasIndex(a => a.SubmittedAtUtc)
+                .IsDescending()
+                .HasDatabaseName("idx_datasetaccessapplications_submitted");
         });
 
         SeedData(modelBuilder);

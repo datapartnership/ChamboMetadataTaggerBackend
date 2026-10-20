@@ -1,33 +1,36 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using System.Text;
 using Azure.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Npgsql;
+using System.Reflection;
 using MetadataTagging.Authentication;
 using MetadataTagging.Data;
 using MetadataTagging.Models;
 using MetadataTagging.Services;
+using MetadataTagging.Swagger;
 using MetadataTagger.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Configuration.AddEnvironmentVariables();
-
+builder.Services.Configure<AuthenticationOptions>(builder.Configuration.GetSection(AuthenticationOptions.Section));
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.Section));
-builder.Services.Configure<StorageOptions>(builder.Configuration.GetSection(StorageOptions.Section));
-builder.Services.Configure<S3StorageOptions>(builder.Configuration.GetSection("Storage:S3"));
-builder.Services.Configure<AzureStorageOptions>(builder.Configuration.GetSection("Storage:AzureStorage"));
 builder.Services.Configure<DatabaseOptions>(builder.Configuration.GetSection(DatabaseOptions.Section));
 builder.Services.Configure<MetadataTagger.Options.CorsOptions>(builder.Configuration.GetSection(MetadataTagger.Options.CorsOptions.Section));
 builder.Services.Configure<EntraIdOptions>(builder.Configuration.GetSection(EntraIdOptions.Section));
+builder.Services.Configure<KeycloakOptions>(builder.Configuration.GetSection(KeycloakOptions.SectionName));
 builder.Services.Configure<DefaultAdminSettings>(builder.Configuration.GetSection(DefaultAdminSettings.Section));
 builder.Services.Configure<DefaultTaggerSettings>(builder.Configuration.GetSection(DefaultTaggerSettings.Section));
 builder.Services.Configure<DefaultSupervisorSettings>(builder.Configuration.GetSection(DefaultSupervisorSettings.Section));
+
+// ── Catalog API options (ported from the LRLL merge) ─────────────────────────
+builder.Services.Configure<CatalogStorageOptions>(builder.Configuration.GetSection(CatalogStorageOptions.SectionName));
+builder.Services.Configure<RateLimitOptions>(builder.Configuration.GetSection(RateLimitOptions.SectionName));
 
 var dbOptions = builder.Configuration.GetSection(DatabaseOptions.Section).Get<DatabaseOptions>()
     ?? new DatabaseOptions();
@@ -37,7 +40,7 @@ var dbOptions = builder.Configuration.GetSection(DatabaseOptions.Section).Get<Da
 // lambda causes EF Core to see different options on every request and allocate a new
 // internal IServiceProvider each time, triggering ManyServiceProvidersCreatedWarning.
 Npgsql.NpgsqlDataSource? npgsqlDataSource = null;
-if (dbOptions.Provider.Equals("postgresql", StringComparison.OrdinalIgnoreCase) && dbOptions.UseManagedIdentity)
+if (dbOptions.UseManagedIdentity)
 {
     var connectionString = $"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Ssl Mode=Require;Trust Server Certificate=true;";
     var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
@@ -56,68 +59,129 @@ if (dbOptions.Provider.Equals("postgresql", StringComparison.OrdinalIgnoreCase) 
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
 {
-    if (dbOptions.Provider.Equals("postgresql", StringComparison.OrdinalIgnoreCase))
-    {
-        if (npgsqlDataSource != null)
-            options.UseNpgsql(npgsqlDataSource);
-        else
-            options.UseNpgsql($"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Password={dbOptions.Password}");
-    }
+    if (npgsqlDataSource != null)
+        options.UseNpgsql(npgsqlDataSource);
     else
-        options.UseSqlite($"Data Source={dbOptions.DataSource}");
+        options.UseNpgsql($"Host={dbOptions.Host};Port={dbOptions.Port};Database={dbOptions.Name};Username={dbOptions.Username};Password={dbOptions.Password}");
 });
 
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<IEntraUserProvisioningService, EntraUserProvisioningService>();
 builder.Services.AddScoped<IFileService, FileService>();
-
-var storageOptions = builder.Configuration.GetSection(StorageOptions.Section).Get<StorageOptions>()
-    ?? new StorageOptions();
-if (storageOptions.Provider.Equals("s3", StringComparison.OrdinalIgnoreCase))
-    builder.Services.AddScoped<IStorageService, S3StorageService>();
-else
-    builder.Services.AddScoped<IStorageService, AzureBlobService>();
-
 builder.Services.AddScoped<ISupervisorService, SupervisorService>();
+builder.Services.AddScoped<TaggingImportService>();
+
+// ── Catalog API services (ported from the LRLL merge) ────────────────────────
+builder.Services.AddSingleton<CroissantMetadataParser>();
+builder.Services.AddScoped<CatalogTagPublisher>();
+builder.Services.AddScoped<SeedService>();
+builder.Services.AddScoped<CatalogService>();
+builder.Services.AddScoped<CollectionQueryService>();
+builder.Services.AddScoped<CollectionBundleService>();
+builder.Services.AddScoped<SummaryService>();
+builder.Services.AddSingleton<CroissantBuilder>();
+builder.Services.AddSingleton<TextChunkService>();
+
+// ── Catalog file storage (local disk, S3-compatible, or Azure Blob Storage) ──
+// One bucket/container laid out as Provider/CollectionFolder, shared by the tagging
+// workflow and the catalog API so tagger BlobNames and catalog ContentUrls are the same keys.
+var catalogStorageOptions = builder.Configuration.GetSection(CatalogStorageOptions.SectionName).Get<CatalogStorageOptions>()
+    ?? new CatalogStorageOptions();
+if (catalogStorageOptions.Provider.Equals("s3", StringComparison.OrdinalIgnoreCase))
+    builder.Services.AddSingleton<IFileStorageService, S3FileStorageService>();
+else if (catalogStorageOptions.Provider.Equals("azure", StringComparison.OrdinalIgnoreCase))
+    builder.Services.AddSingleton<IFileStorageService, AzureBlobStorageService>();
+else
+    builder.Services.AddSingleton<IFileStorageService, LocalFileStorageService>();
+
+var authOptions = builder.Configuration.GetSection(AuthenticationOptions.Section).Get<AuthenticationOptions>()
+    ?? new AuthenticationOptions();
+if (!authOptions.IsKnownMethod)
+{
+    throw new InvalidOperationException(
+        $"Authentication:Method must be one of '{AuthenticationMethods.Jwt}', '{AuthenticationMethods.EntraId}', or '{AuthenticationMethods.Keycloak}' (got '{authOptions.Method}').");
+}
 
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.Section).Get<JwtOptions>();
-if (jwtOptions == null || string.IsNullOrEmpty(jwtOptions.SecretKey))
-{
-    throw new InvalidOperationException("JWT SecretKey not configured");
-}
-var secretKey = jwtOptions.SecretKey;
-
 var entraIdOptions = builder.Configuration.GetSection(EntraIdOptions.Section).Get<EntraIdOptions>()
     ?? new EntraIdOptions();
+var keycloakOptions = builder.Configuration.GetSection(KeycloakOptions.SectionName).Get<KeycloakOptions>()
+    ?? new KeycloakOptions();
 
 const string LocalAuthScheme = "Local";
 const string EntraIdAuthScheme = "EntraId";
-const string SmartAuthScheme = "Smart";
+const string KeycloakAuthScheme = "Keycloak";
 
-var authenticationBuilder = builder.Services.AddAuthentication(options =>
+var recognizedRoles = new HashSet<string>(
+    [UserRoles.Admin, UserRoles.Supervisor, UserRoles.Tagger],
+    StringComparer.OrdinalIgnoreCase);
+
+// Only validate / register the provider selected by Authentication:Method. Nested
+// EntraId / Keycloak / JwtSettings sections can stay populated for other environments
+// without accidentally enabling those schemes.
+if (authOptions.IsJwt)
 {
-    // When Entra ID isn't configured, behave exactly as before: the local JWT
-    // scheme is the only (and default) one.
-    options.DefaultAuthenticateScheme = entraIdOptions.IsConfigured ? SmartAuthScheme : LocalAuthScheme;
-    options.DefaultChallengeScheme = entraIdOptions.IsConfigured ? SmartAuthScheme : LocalAuthScheme;
-})
-.AddJwtBearer(LocalAuthScheme, options =>
-{
-    options.TokenValidationParameters = new TokenValidationParameters
+    if (jwtOptions == null || string.IsNullOrEmpty(jwtOptions.SecretKey))
     {
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = true,
-        ValidateIssuerSigningKey = true,
-        ValidIssuer = jwtOptions.Issuer,
-        ValidAudience = jwtOptions.Audience,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
-    };
-});
+        throw new InvalidOperationException(
+            "JwtSettings:SecretKey is required when Authentication:Method is Jwt.");
+    }
 
-if (entraIdOptions.IsConfigured)
+    builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = LocalAuthScheme;
+        options.DefaultChallengeScheme = LocalAuthScheme;
+    })
+    .AddJwtBearer(LocalAuthScheme, options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtOptions.Issuer,
+            ValidAudience = jwtOptions.Audience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SecretKey))
+        };
+    });
+}
+else if (authOptions.IsEntraId)
 {
+    if (!entraIdOptions.IsConfigured)
+    {
+        throw new InvalidOperationException(
+            "EntraId:TenantId and EntraId:ClientId are required when Authentication:Method is EntraId.");
+    }
+
+    var invalidGroupRoleMapping = entraIdOptions.GroupRoleMappings.FirstOrDefault(mapping =>
+        !Guid.TryParse(mapping.GroupId, out _) || !recognizedRoles.Contains(mapping.Role));
+    if (invalidGroupRoleMapping != null)
+    {
+        throw new InvalidOperationException(
+            "Each EntraId:GroupRoleMappings entry must contain a valid group object ID and a role of Admin, Supervisor, or Tagger.");
+    }
+
+    var conflictingGroupRoleMapping = entraIdOptions.GroupRoleMappings
+        .GroupBy(mapping => mapping.GroupId, StringComparer.OrdinalIgnoreCase)
+        .FirstOrDefault(group => group
+            .Select(mapping => mapping.Role)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Skip(1)
+            .Any());
+    if (conflictingGroupRoleMapping != null)
+    {
+        throw new InvalidOperationException(
+            $"Entra group '{conflictingGroupRoleMapping.Key}' is mapped to more than one application role.");
+    }
+
+    var authenticationBuilder = builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = EntraIdAuthScheme;
+        options.DefaultChallengeScheme = EntraIdAuthScheme;
+    });
+
     authenticationBuilder.AddMicrosoftIdentityWebApi(
         builder.Configuration,
         configSectionName: EntraIdOptions.Section,
@@ -138,43 +202,78 @@ if (entraIdOptions.IsConfigured)
                 await previousOnTokenValidated(context);
             }
 
-            await EntraTokenClaimsNormalizer.NormalizeAsync(context, entraIdOptions.RoleClaimType);
+            await EntraTokenClaimsNormalizer.NormalizeAsync(context, entraIdOptions);
         };
     });
-
-    // Routes each incoming request to the "Local" or "EntraId" scheme based on the
-    // bearer token's issuer, so existing [Authorize(Roles = ...)] attributes (which
-    // don't specify a scheme) keep working unchanged for both token types.
-    authenticationBuilder.AddPolicyScheme(SmartAuthScheme, "Local or Entra ID", options =>
+}
+else // Keycloak
+{
+    if (!keycloakOptions.IsConfigured)
     {
-        options.ForwardDefaultSelector = context =>
+        throw new InvalidOperationException(
+            "Keycloak:Authority is required when Authentication:Method is Keycloak.");
+    }
+
+    var invalidKeycloakRoleMapping = keycloakOptions.RoleMappings.FirstOrDefault(mapping =>
+        string.IsNullOrWhiteSpace(mapping.KeycloakRole) || !recognizedRoles.Contains(mapping.Role));
+    if (invalidKeycloakRoleMapping != null)
+    {
+        throw new InvalidOperationException(
+            "Each Keycloak:RoleMappings entry must contain a Keycloak client role name and a role of Admin, Supervisor, or Tagger.");
+    }
+
+    var conflictingKeycloakRoleMapping = keycloakOptions.RoleMappings
+        .GroupBy(mapping => mapping.KeycloakRole, StringComparer.OrdinalIgnoreCase)
+        .FirstOrDefault(group => group
+            .Select(mapping => mapping.Role)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Skip(1)
+            .Any());
+    if (conflictingKeycloakRoleMapping != null)
+    {
+        throw new InvalidOperationException(
+            $"Keycloak role '{conflictingKeycloakRoleMapping.Key}' is mapped to more than one application role.");
+    }
+
+    builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = KeycloakAuthScheme;
+        options.DefaultChallengeScheme = KeycloakAuthScheme;
+    })
+    .AddJwtBearer(KeycloakAuthScheme, options =>
+    {
+        options.Authority = keycloakOptions.Authority;
+        options.Audience = keycloakOptions.Audience;
+        options.RequireHttpsMetadata = keycloakOptions.RequireHttpsMetadata;
+        options.TokenValidationParameters.ValidateIssuer = true;
+
+        // Map Keycloak client roles onto ClaimTypes.Role and JIT-provision/sync the
+        // local user record so downstream controllers see the same claim shape as
+        // local and Entra ID logins.
+        options.Events ??= new JwtBearerEvents();
+        var previousOnTokenValidated = options.Events.OnTokenValidated;
+        options.Events.OnTokenValidated = async context =>
         {
-            var authorizationHeader = context.Request.Headers.Authorization.ToString();
-            if (authorizationHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            if (previousOnTokenValidated != null)
             {
-                var token = authorizationHeader["Bearer ".Length..].Trim();
-                try
-                {
-                    var issuer = new JwtSecurityTokenHandler().ReadJwtToken(token).Issuer;
-                    if (issuer.Contains("login.microsoftonline.com", StringComparison.OrdinalIgnoreCase) ||
-                        issuer.Contains("sts.windows.net", StringComparison.OrdinalIgnoreCase))
-                    {
-                        return EntraIdAuthScheme;
-                    }
-                }
-                catch (Exception)
-                {
-                    // Not a well-formed JWT — fall through to the local scheme, which
-                    // will reject it during normal validation.
-                }
+                await previousOnTokenValidated(context);
             }
 
-            return LocalAuthScheme;
+            await KeycloakTokenClaimsNormalizer.NormalizeAsync(context, keycloakOptions);
         };
     });
 }
 
-builder.Services.AddAuthorization();
+// ── Authorization policies ────────────────────────────────────────────────────
+// The catalog API's "Read"/"Write" policies (ported from LRLL, which originally
+// gated them on Azure AD groups / Keycloak roles) are re-mapped onto Chambo's own
+// Admin/Supervisor/Tagger role model: any authenticated (and therefore JIT-verified
+// or locally provisioned) user can Read; only Admins can Write.
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("Read", policy => policy.RequireAuthenticatedUser());
+    options.AddPolicy("Write", policy => policy.RequireRole(UserRoles.Admin));
+});
 
 builder.Services.AddControllers();
 
@@ -211,6 +310,80 @@ builder.Services.AddSwaggerGen(c =>
             Array.Empty<string>()
         }
     });
+
+    // Entra ID OAuth2 Authorization Code + PKCE (ported from the LRLL merge)
+    if (authOptions.IsEntraId)
+    {
+        c.AddSecurityDefinition("oauth2", new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.OAuth2,
+            Flows = new OpenApiOAuthFlows
+            {
+                AuthorizationCode = new OpenApiOAuthFlow
+                {
+                    AuthorizationUrl = new Uri($"{entraIdOptions.Instance.TrimEnd('/')}/{entraIdOptions.TenantId}/oauth2/v2.0/authorize"),
+                    TokenUrl = new Uri($"{entraIdOptions.Instance.TrimEnd('/')}/{entraIdOptions.TenantId}/oauth2/v2.0/token"),
+                    Scopes = new Dictionary<string, string>
+                    {
+                        [$"{entraIdOptions.Audience}/user_impersonation"] = "Access the Metadata Tagging API"
+                    }
+                }
+            }
+        });
+
+        c.AddSecurityRequirement(new OpenApiSecurityRequirement
+        {
+            {
+                new OpenApiSecurityScheme
+                {
+                    Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "oauth2" }
+                },
+                [$"{entraIdOptions.Audience}/user_impersonation"]
+            }
+        });
+    }
+
+    // Keycloak OAuth2 Authorization Code + PKCE (ported from the LRLL merge)
+    if (authOptions.IsKeycloak)
+    {
+        c.AddSecurityDefinition("keycloak-oauth2", new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.OAuth2,
+            Flows = new OpenApiOAuthFlows
+            {
+                AuthorizationCode = new OpenApiOAuthFlow
+                {
+                    AuthorizationUrl = new Uri(keycloakOptions.AuthorizationUrl),
+                    TokenUrl = new Uri(keycloakOptions.TokenUrl),
+                    Scopes = new Dictionary<string, string>
+                    {
+                        ["openid"] = "OpenID Connect",
+                        ["profile"] = "User profile"
+                    }
+                }
+            }
+        });
+
+        c.AddSecurityRequirement(new OpenApiSecurityRequirement
+        {
+            {
+                new OpenApiSecurityScheme
+                {
+                    Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "keycloak-oauth2" }
+                },
+                ["openid"]
+            }
+        });
+    }
+
+    // Include XML comments from the project (controllers + DTOs) -- ported from the LRLL merge.
+    var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    if (File.Exists(xmlPath))
+        c.IncludeXmlComments(xmlPath);
+
+    // Inject realistic Croissant JSON-LD examples into Swagger UI for the catalog endpoints.
+    c.OperationFilter<CroissantExampleFilter>();
 });
 
 var corsOptions = builder.Configuration.GetSection(MetadataTagger.Options.CorsOptions.Section).Get<MetadataTagger.Options.CorsOptions>()
@@ -237,14 +410,31 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    //dbContext.Database.EnsureDeleted();
-    dbContext.Database.EnsureCreated();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
 
-    // EnsureCreated() only creates the schema for a brand-new database; it does not
-    // alter tables that already exist. Since this project has no EF Core migrations,
-    // patch pre-existing "Users" tables (e.g. an already-provisioned dev/prod database)
-    // so they pick up the columns added for Entra ID support.
-    await EnsureUserAuthColumnsAsync(dbContext, dbOptions.Provider);
+    // Schema is managed via EF Core Migrations (ported from the LRLL merge), replacing
+    // the previous EnsureCreated()/manual column-patching approach. See the "InitialBaseline"
+    // migration for notes on applying this to an already-provisioned production database.
+    if (dbOptions.ResetOnStartup)
+    {
+        logger.LogWarning("Database:ResetOnStartup is true: dropping all tables and rebuilding the schema. " +
+                          "All data is lost on every restart until this is set back to false.");
+        await DatabaseReset.DropAllTablesAsync(dbContext);
+    }
+    await dbContext.Database.MigrateAsync();
+
+    try
+    {
+        var canConnect = await dbContext.Database.CanConnectAsync();
+        if (canConnect)
+            logger.LogInformation("Database connected successfully ({Host}/{Database}).", dbOptions.Host, dbOptions.Name);
+        else
+            logger.LogWarning("Database connection check failed ({Host}/{Database}).", dbOptions.Host, dbOptions.Name);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to connect to database ({Host}/{Database}).", dbOptions.Host, dbOptions.Name);
+    }
 
     // Create default Admin user
     var adminSettings = scope.ServiceProvider.GetRequiredService<IOptions<DefaultAdminSettings>>().Value;
@@ -314,19 +504,49 @@ using (var scope = app.Services.CreateScope())
             await dbContext.SaveChangesAsync();
         }
     }
+
+    if (catalogStorageOptions.Provider.Equals("azure", StringComparison.OrdinalIgnoreCase)
+        && scope.ServiceProvider.GetRequiredService<IFileStorageService>() is AzureBlobStorageService azureStorage)
+    {
+        try
+        {
+            await azureStorage.LogPrefixAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to list Azure catalog storage prefix '{Prefix}'.",
+                string.IsNullOrEmpty(catalogStorageOptions.Azure.Prefix) ? "(container root)" : catalogStorageOptions.Azure.Prefix);
+        }
+    }
 }
 
-app.UseDefaultFiles(new DefaultFilesOptions
-{
-    DefaultFileNames = new List<string> { "index.html" }
-});
+//let's serve the fronted in another service
+//app.UseStaticFiles();
 
-app.UseStaticFiles();
-
+// Swagger is Development-only.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Metadata Tagging API v1");
+        c.DefaultModelsExpandDepth(-1); // hide schema section by default
+        c.DisplayRequestDuration();
+        if (authOptions.IsEntraId)
+        {
+            c.OAuthClientId(entraIdOptions.ClientId);
+            c.OAuthScopes($"{entraIdOptions.Audience}/user_impersonation");
+            c.OAuthUsePkce();
+        }
+        if (authOptions.IsKeycloak)
+        {
+            // Allows Swagger UI to pick up the Keycloak client when 'keycloak-oauth2' is selected.
+            c.OAuthAdditionalQueryStringParams(new Dictionary<string, string>
+            {
+                ["kc_client_id"] = keycloakOptions.ClientId
+            });
+        }
+    });
 }
 
 app.UseCors("AllowAll");
@@ -343,39 +563,3 @@ app.MapControllers();
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
 app.Run();
-
-// Adds any "Users" table columns introduced for Entra ID support that are missing on an
-// already-existing database (EnsureCreated() does not retrofit schema changes). Safe to run
-// on every startup: each statement is a no-op once the column/constraint change is applied.
-static async Task EnsureUserAuthColumnsAsync(ApplicationDbContext dbContext, string provider)
-{
-    if (provider.Equals("postgresql", StringComparison.OrdinalIgnoreCase))
-    {
-        await dbContext.Database.ExecuteSqlRawAsync(
-            "ALTER TABLE \"Users\" ADD COLUMN IF NOT EXISTS \"AuthProvider\" text NOT NULL DEFAULT 'Local'");
-        await dbContext.Database.ExecuteSqlRawAsync(
-            "ALTER TABLE \"Users\" ALTER COLUMN \"PasswordHash\" DROP NOT NULL");
-        return;
-    }
-
-    // SQLite has no "ADD COLUMN IF NOT EXISTS", so check pragma_table_info first. Relaxing an
-    // existing NOT NULL constraint on SQLite requires a full table rebuild, which is not done
-    // here — local SQLite databases are disposable dev stores, so delete the database file to
-    // pick up the relaxed PasswordHash constraint via a fresh EnsureCreated().
-    var connection = dbContext.Database.GetDbConnection();
-    if (connection.State != System.Data.ConnectionState.Open)
-    {
-        await connection.OpenAsync();
-    }
-
-    await using var command = connection.CreateCommand();
-    command.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Users') WHERE name = 'AuthProvider'";
-    var hasAuthProviderColumn = Convert.ToInt64(await command.ExecuteScalarAsync()) > 0;
-
-    if (!hasAuthProviderColumn)
-    {
-        await dbContext.Database.ExecuteSqlRawAsync(
-            "ALTER TABLE \"Users\" ADD COLUMN \"AuthProvider\" TEXT NOT NULL DEFAULT 'Local'");
-    }
-}
-

@@ -2,11 +2,11 @@ node_modules/
 .env
 bin/
 obj/
-*.db
-*.db*
 .vscode/
 copyFEandBuildImage.sh
 backend.http
 *.http
 *.csv
 .DS_Store
+Catalog/
+nuget.config

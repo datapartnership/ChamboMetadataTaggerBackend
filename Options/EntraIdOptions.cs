@@ -1,10 +1,10 @@
 namespace MetadataTagger.Options;
 
 /// <summary>
-/// Configuration for validating Azure Entra ID (Azure AD) access tokens as an
-/// additional authentication scheme, alongside the existing local JWT login.
-/// Entra ID authentication is only enabled when <see cref="TenantId"/> and
-/// <see cref="ClientId"/> are both configured.
+/// Configuration for validating Azure Entra ID (Azure AD) access tokens.
+/// Used when <see cref="AuthenticationOptions.Method"/> is
+/// <see cref="AuthenticationMethods.EntraId"/>. Requires <see cref="TenantId"/>
+/// and <see cref="ClientId"/> to be set.
 /// </summary>
 public class EntraIdOptions
 {
@@ -21,6 +21,23 @@ public class EntraIdOptions
     /// </summary>
     public string RoleClaimType { get; set; } = "roles";
 
+    /// <summary>
+    /// Claim type that carries Entra group object IDs.
+    /// </summary>
+    public string GroupClaimType { get; set; } = "groups";
+
+    /// <summary>
+    /// Maps Entra group object IDs to application roles when app roles are not
+    /// emitted directly in the access token.
+    /// </summary>
+    public List<EntraGroupRoleMapping> GroupRoleMappings { get; set; } = [];
+
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(TenantId) && !string.IsNullOrWhiteSpace(ClientId);
+}
+
+public class EntraGroupRoleMapping
+{
+    public string GroupId { get; set; } = string.Empty;
+    public string Role { get; set; } = string.Empty;
 }

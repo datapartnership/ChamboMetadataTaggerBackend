@@ -23,7 +23,7 @@ public class FileServiceAssignedCountTests
         await context.Database.EnsureCreatedAsync();
         SeedFiles(context);
 
-        var service = new FileService(context, new StubStorageService());
+        var service = new FileService(context, new StubStorageService(), new CatalogTagPublisher(context));
         var pagination = new PaginationParams { Page = 1, PageSize = 100 };
 
         var assigned = await service.GetAssignedFilesAsync(pagination);
@@ -36,6 +36,43 @@ public class FileServiceAssignedCountTests
         Assert.Equal(totalFileRecords, assigned.TotalCount + unassigned.TotalCount);
         Assert.All(assigned.Items, f => Assert.NotEqual(nameof(FileTaggingStatus.Unassigned), f.Status));
         Assert.All(unassigned.Items, f => Assert.Equal(nameof(FileTaggingStatus.Unassigned), f.Status));
+    }
+
+    [Fact]
+    public async Task Unassigned_ListsFolderChildren_AndPagesOverThem()
+    {
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var context = new ApplicationDbContext(options);
+        await context.Database.EnsureCreatedAsync();
+        context.FileMetadata.AddRange(
+            CreateFile("ProvA/Col1/a.wav", FileTaggingStatus.Unassigned),
+            CreateFile("ProvA/Col1/b.wav", FileTaggingStatus.Unassigned),
+            CreateFile("ProvA/Col2/c.wav", FileTaggingStatus.Unassigned),
+            CreateFile("ProvB/Col1/d.wav", FileTaggingStatus.Unassigned),
+            CreateFile("ProvB/Col1/e.wav", FileTaggingStatus.Assigned));
+        context.SaveChanges();
+
+        var service = new FileService(context, new StubStorageService(), new CatalogTagPublisher(context));
+
+        var root = await service.GetUnassignedFilesAsync(new PaginationParams { Page = 1, PageSize = 1 });
+        Assert.Equal(2, root.TotalCount);
+        Assert.Equal(2, root.TotalPages);
+        Assert.Equal(4, root.TotalFileCount);
+        var first = Assert.Single(root.Items);
+        Assert.True(first.IsDirectory);
+        Assert.Equal("ProvA/", first.BlobName);
+        Assert.Equal(3, first.FileCount);
+
+        var col1 = await service.GetUnassignedFilesAsync(new PaginationParams { Page = 1, PageSize = 25, SortBy = "fileName" }, "ProvA/Col1");
+        Assert.Equal("ProvA/Col1/", col1.Folder);
+        Assert.Equal(["ProvA/Col1/a.wav", "ProvA/Col1/b.wav"], col1.Items.Select(f => f.BlobName));
+        Assert.All(col1.Items, f => Assert.False(f.IsDirectory));
     }
 
     private static void SeedFiles(ApplicationDbContext context)
@@ -61,28 +98,21 @@ public class FileServiceAssignedCountTests
         UploadedAt = DateTime.UtcNow
     };
 
-    private sealed class StubStorageService : IStorageService
+    private sealed class StubStorageService : IFileStorageService
     {
-        public Task<IEnumerable<BlobFileDto>> ListBlobsAsync(string? prefix = null) =>
-            Task.FromResult(Enumerable.Empty<BlobFileDto>());
-
-        public Task<string> GetBlobUrlAsync(string blobName) =>
-            Task.FromResult(string.Empty);
-
-        public Task<string> GetBlobSasUrlAsync(string blobName, int expiryMinutes = 60) =>
-            Task.FromResult(string.Empty);
-
-        public Task<bool> BlobExistsAsync(string blobName) =>
-            Task.FromResult(false);
-
-        public Task<(Stream Content, string ContentType, long ContentLength)> DownloadBlobAsync(string blobName) =>
+        public Task<Stream> OpenReadAsync(string key, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<(Stream Content, string ContentType, long ContentLength, long TotalSize)> DownloadBlobRangeAsync(
-            string blobName, long offset, long? length) =>
+        public Task<Stream> OpenReadRangeAsync(string key, long offset, long length, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<long> GetBlobSizeAsync(string blobName) =>
-            Task.FromResult(0L);
+        public Task<IReadOnlyList<StorageFileEntry>> ListFilesAsync(string prefix = "", CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<StorageFileEntry>>([]);
+
+        public Task<StorageFileEntry?> GetEntryAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<StorageFileEntry?>(null);
+
+        public Task<string?> GetReadUrlAsync(string key, TimeSpan expiry, CancellationToken ct = default) =>
+            Task.FromResult<string?>(null);
     }
 }

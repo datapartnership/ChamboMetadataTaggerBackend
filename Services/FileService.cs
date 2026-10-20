@@ -7,13 +7,50 @@ namespace MetadataTagging.Services;
 
 public class FileService : IFileService
 {
-    private readonly ApplicationDbContext _context;
-    private readonly IStorageService _blobService;
+    public const string PreviewUnavailableMessage =
+        "Preview URLs are not available for local catalog storage; use the file's /stream endpoint instead.";
 
-    public FileService(ApplicationDbContext context, IStorageService blobService)
+    private readonly ApplicationDbContext _context;
+    private readonly IFileStorageService _storage;
+    private readonly CatalogTagPublisher _publisher;
+
+    public FileService(ApplicationDbContext context, IFileStorageService storage, CatalogTagPublisher publisher)
     {
         _context = context;
-        _blobService = blobService;
+        _storage = storage;
+        _publisher = publisher;
+    }
+
+    private Task PublishAsync(FileMetadata file) =>
+        file.BlobName is null ? Task.CompletedTask : _publisher.ApplyAsync([file.BlobName]);
+
+    public static BlobFileDto ToBlobFile(StorageFileEntry entry)
+    {
+        var key = CatalogKey.Normalize(entry.Key);
+        var contentType = FileCategoryHelper.GetContentType(key);
+        return new BlobFileDto
+        {
+            BlobName = key,
+            FileUrl = key,
+            FileSize = entry.Size,
+            ContentType = contentType,
+            FileCategory = FileCategoryHelper.FromContentType(contentType, key).ToString(),
+            LastModified = entry.LastModified == default ? null : entry.LastModified.UtcDateTime,
+        };
+    }
+
+    private async Task<FileMetadata?> FindOrImportAsync(string blobName)
+    {
+        blobName = CatalogKey.Normalize(blobName);
+        var file = await _context.FileMetadata.FirstOrDefaultAsync(f => f.BlobName == blobName);
+        if (file != null)
+            return file;
+
+        if (!CatalogKey.IsCollectionContent(blobName) || await _storage.GetEntryAsync(blobName) is not { } entry)
+            return null;
+
+        await ImportFileFromBlobAsync(ToBlobFile(entry));
+        return await _context.FileMetadata.FirstOrDefaultAsync(f => f.BlobName == blobName);
     }
 
     public async Task<PagedResponse<FileMetadataDto>> GetAssignedFilesAsync(PaginationParams pagination)
@@ -79,6 +116,7 @@ public class FileService : IFileService
 
     public async Task<FileMetadataDto?> GetFileByBlobNameAsync(string blobName)
     {
+        blobName = CatalogKey.Normalize(blobName);
         var file = await _context.FileMetadata
             .Include(f => f.FileAssignments)
             .Include(f => f.Tags)
@@ -93,7 +131,7 @@ public class FileService : IFileService
         {
             FileName = request.FileName,
             FileUrl = request.FileUrl,
-            BlobName = request.BlobName,
+            BlobName = request.BlobName is null ? null : CatalogKey.Normalize(request.BlobName),
             FileSize = request.FileSize,
             ContentType = request.ContentType,
             UploadedAt = DateTime.UtcNow,
@@ -108,70 +146,73 @@ public class FileService : IFileService
 
     public async Task<FileMetadataDto> ImportFileFromBlobAsync(BlobFileDto blobFile)
     {
+        var blobName = CatalogKey.Normalize(blobFile.BlobName);
         var existingFile = await _context.FileMetadata
-            .FirstOrDefaultAsync(f => f.BlobName == blobFile.BlobName);
+            .FirstOrDefaultAsync(f => f.BlobName == blobName);
 
         if (existingFile != null)
         {
             return MapToDto(existingFile);
         }
 
-        var file = new FileMetadata
-        {
-            FileName = blobFile.BlobName,
-            FileUrl = blobFile.FileUrl,
-            BlobName = blobFile.BlobName,
-            FileSize = blobFile.FileSize,
-            ContentType = blobFile.ContentType,
-            UploadedAt = blobFile.LastModified ?? DateTime.UtcNow,
-            Status = FileTaggingStatus.Unassigned
-        };
-
+        var file = NewFileMetadata(blobFile, blobName);
         _context.FileMetadata.Add(file);
         await _context.SaveChangesAsync();
 
         return MapToDto(file);
     }
 
-    public async Task<int> SyncFilesFromBlobStorageAsync()
+    private static FileMetadata NewFileMetadata(BlobFileDto blobFile, string blobName) => new()
     {
-        var blobs = await _blobService.ListBlobsAsync();
-        var blobNames = blobs.Select(b => b.BlobName).ToHashSet();
-        var importedCount = 0;
+        FileName = blobName,
+        FileUrl = blobFile.FileUrl,
+        BlobName = blobName,
+        FileSize = blobFile.FileSize,
+        ContentType = blobFile.ContentType,
+        UploadedAt = blobFile.LastModified ?? DateTime.UtcNow,
+        Status = FileTaggingStatus.Unassigned
+    };
 
-        await _context.FileMetadata
-            .Where(f => !blobNames.Contains(f.BlobName))
-            .ExecuteDeleteAsync();
+    public async Task<SyncBlobFilesResponse> SyncFilesFromBlobStorageAsync()
+    {
+        var blobs = (await _storage.ListFilesAsync())
+            .Where(e => CatalogKey.IsCollectionContent(e.Key))
+            .Select(ToBlobFile)
+            .ToList();
+        var blobNames = blobs.Select(b => b.BlobName).ToHashSet(StringComparer.Ordinal);
 
-        foreach (var blob in blobs)
+        var existing = await _context.FileMetadata
+            .Select(f => new { f.Id, f.BlobName })
+            .ToListAsync();
+
+        var removed = existing
+            .Where(f => f.BlobName == null || !blobNames.Contains(f.BlobName))
+            .ToList();
+        foreach (var chunk in removed.Select(f => f.Id).Chunk(1000))
         {
-            var existingFile = await _context.FileMetadata
-                .FirstOrDefaultAsync(f => f.BlobName == blob.BlobName);
-
-            if (existingFile == null)
-            {
-                var file = new FileMetadata
-                {
-                    FileName = blob.BlobName,
-                    FileUrl = blob.FileUrl,
-                    BlobName = blob.BlobName,
-                    FileSize = blob.FileSize,
-                    ContentType = blob.ContentType,
-                    UploadedAt = blob.LastModified ?? DateTime.UtcNow,
-                    Status = FileTaggingStatus.Unassigned
-                };
-
-                _context.FileMetadata.Add(file);
-                importedCount++;
-            }
+            await _context.FileMetadata
+                .Where(f => chunk.Contains(f.Id))
+                .ExecuteDeleteAsync();
         }
+        await _publisher.ApplyAsync(removed.Select(f => f.BlobName).OfType<string>());
 
-        if (importedCount > 0)
+        var known = existing
+            .Select(f => f.BlobName)
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+        var added = blobs.Where(b => !known.Contains(b.BlobName)).ToList();
+        _context.FileMetadata.AddRange(added.Select(b => NewFileMetadata(b, b.BlobName)));
+        if (added.Count > 0)
         {
             await _context.SaveChangesAsync();
         }
 
-        return importedCount;
+        return new SyncBlobFilesResponse
+        {
+            TotalBlobs = blobs.Count,
+            ImportedFiles = added.Count,
+            ExistingFiles = blobs.Count - added.Count
+        };
     }
 
     public async Task<bool> AssignFileToUserAsync(int fileId, int userId, int adminId)
@@ -214,29 +255,8 @@ public class FileService : IFileService
 
     public async Task<bool> AssignBlobFileToUserAsync(string blobName, int userId, int adminId)
     {
-        var file = await _context.FileMetadata
-            .FirstOrDefaultAsync(f => f.BlobName == blobName);
-
-        if (file == null)
-        {
-            var blobs = await _blobService.ListBlobsAsync();
-            var blobFile = blobs.FirstOrDefault(b => b.BlobName == blobName);
-
-            if (blobFile == null)
-            {
-                return false;
-            }
-
-            var importedFile = await ImportFileFromBlobAsync(blobFile);
-            file = await _context.FileMetadata.FirstOrDefaultAsync(f => f.BlobName == blobName);
-
-            if (file == null)
-            {
-                return false;
-            }
-        }
-
-        return await AssignFileToUserAsync(file.Id, userId, adminId);
+        var file = await FindOrImportAsync(blobName);
+        return file != null && await AssignFileToUserAsync(file.Id, userId, adminId);
     }
 
     public async Task<AssignMultipleFilesResult> AssignMultipleFilesToUserAsync(List<string> blobNames, int userId, int adminId)
@@ -256,30 +276,13 @@ public class FileService : IFileService
 
         foreach (var blobName in blobNames)
         {
-            var file = await _context.FileMetadata
-                .FirstOrDefaultAsync(f => f.BlobName == blobName);
+            var file = await FindOrImportAsync(blobName);
 
             if (file == null)
             {
-                var blobs = await _blobService.ListBlobsAsync();
-                var blobFile = blobs.FirstOrDefault(b => b.BlobName == blobName);
-
-                if (blobFile == null)
-                {
-                    result.Failed++;
-                    result.FailedBlobNames.Add(blobName);
-                    continue;
-                }
-
-                var importedFile = await ImportFileFromBlobAsync(blobFile);
-                file = await _context.FileMetadata.FirstOrDefaultAsync(f => f.BlobName == blobName);
-
-                if (file == null)
-                {
-                    result.Failed++;
-                    result.FailedBlobNames.Add(blobName);
-                    continue;
-                }
+                result.Failed++;
+                result.FailedBlobNames.Add(blobName);
+                continue;
             }
 
             var existingAssignment = await _context.FileAssignments
@@ -407,6 +410,7 @@ public class FileService : IFileService
         }
 
         await _context.SaveChangesAsync();
+        await PublishAsync(file);
         return true;
     }
 
@@ -433,6 +437,7 @@ public class FileService : IFileService
         file.TaggingCompletedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
+        await PublishAsync(file);
         return true;
     }
 
@@ -511,43 +516,68 @@ public class FileService : IFileService
         };
     }
 
-    public async Task<PagedResponse<FileMetadataDto>> GetUnassignedFilesAsync(PaginationParams pagination)
+    public async Task<FolderPagedResponse<FileMetadataDto>> GetUnassignedFilesAsync(PaginationParams pagination, string? folder = null)
     {
-        IQueryable<FileMetadata> query = _context.FileMetadata
+        var dir = FolderListing.NormalizeFolder(folder);
+
+        // Only the columns needed to build the folder tree and sort; full rows are loaded for the page.
+        var rows = await _context.FileMetadata
             .Where(f => f.Status == FileTaggingStatus.Unassigned)
-            .Include(f => f.Tags);
-
-        query = pagination.SortBy?.ToLowerInvariant() switch
-        {
-            "filename" => pagination.IsDescending
-                ? query.OrderByDescending(f => f.FileName)
-                : query.OrderBy(f => f.FileName),
-            "filesize" => pagination.IsDescending
-                ? query.OrderByDescending(f => f.FileSize)
-                : query.OrderBy(f => f.FileSize),
-            "contenttype" => pagination.IsDescending
-                ? query.OrderByDescending(f => f.ContentType)
-                : query.OrderBy(f => f.ContentType),
-            _ => pagination.IsDescending
-                ? query.OrderByDescending(f => f.UploadedAt)
-                : query.OrderBy(f => f.UploadedAt),
-        };
-
-        var totalCount = await query.CountAsync();
-
-        var files = await query
-            .Skip((pagination.Page - 1) * pagination.PageSize)
-            .Take(pagination.PageSize)
+            .Select(f => new UnassignedRow(f.Id, f.BlobName ?? f.FileName, f.FileName, f.FileSize, f.ContentType, f.UploadedAt))
             .ToListAsync();
 
-        return new PagedResponse<FileMetadataDto>
+        var inFolder = rows.Where(r => CatalogKey.Normalize(r.Key).StartsWith(dir, StringComparison.Ordinal)).ToList();
+        var (folders, files) = FolderListing.Split(inFolder, r => r.Key, dir);
+
+        IEnumerable<UnassignedRow> sorted = pagination.SortBy?.ToLowerInvariant() switch
         {
-            Items = files.Select(f => MapToDto(f)),
+            "filename" => pagination.IsDescending
+                ? files.OrderByDescending(f => f.FileName)
+                : files.OrderBy(f => f.FileName),
+            "filesize" => pagination.IsDescending
+                ? files.OrderByDescending(f => f.FileSize)
+                : files.OrderBy(f => f.FileSize),
+            "contenttype" => pagination.IsDescending
+                ? files.OrderByDescending(f => f.ContentType)
+                : files.OrderBy(f => f.ContentType),
+            _ => pagination.IsDescending
+                ? files.OrderByDescending(f => f.UploadedAt)
+                : files.OrderBy(f => f.UploadedAt),
+        };
+
+        var (pageFolders, pageFiles) = FolderListing.Page(folders, sorted.ToList(), pagination.Page, pagination.PageSize);
+
+        var pageIds = pageFiles.Select(f => f.Id).ToList();
+        var entities = await _context.FileMetadata
+            .Where(f => pageIds.Contains(f.Id))
+            .Include(f => f.Tags)
+            .ToDictionaryAsync(f => f.Id);
+
+        var items = pageFolders
+            .Select(f => new FileMetadataDto
+            {
+                FileName = f.Name,
+                FileUrl = "",
+                BlobName = f.Path,
+                Status = nameof(FileTaggingStatus.Unassigned),
+                IsDirectory = true,
+                FileCount = f.FileCount
+            })
+            .Concat(pageFiles.Where(f => entities.ContainsKey(f.Id)).Select(f => MapToDto(entities[f.Id])))
+            .ToList();
+
+        return new FolderPagedResponse<FileMetadataDto>
+        {
+            Items = items,
             Page = pagination.Page,
             PageSize = pagination.PageSize,
-            TotalCount = totalCount
+            TotalCount = folders.Count + files.Count,
+            Folder = dir,
+            TotalFileCount = inFolder.Count
         };
     }
+
+    private sealed record UnassignedRow(int Id, string Key, string FileName, long FileSize, string? ContentType, DateTime UploadedAt);
 
     public async Task<bool> UpdateAudioMetadataAsync(int fileId, double durationSeconds)
     {

@@ -17,6 +17,10 @@ public class FileMetadataDto
     public List<int> AssignedToUserIds { get; set; } = new();
     public string? SupervisorNotes { get; set; }
     public DateTime? SupervisorCheckedAt { get; set; }
+    /// <summary><c>true</c> for a folder entry in a folder listing; <see cref="BlobName"/> is then the folder path.</summary>
+    public bool IsDirectory { get; set; }
+    /// <summary>Number of files beneath a folder entry; <c>null</c> for files.</summary>
+    public int? FileCount { get; set; }
 }
 
 public class CreateFileMetadataRequest
@@ -80,6 +84,10 @@ public class BlobFileDto
     public string? ContentType { get; set; }
     public string FileCategory { get; set; } = "Other";
     public DateTime? LastModified { get; set; }
+    /// <summary><c>true</c> for a folder entry in a folder listing; <see cref="BlobName"/> is then the folder path.</summary>
+    public bool IsDirectory { get; set; }
+    /// <summary>Number of files beneath a folder entry; <c>null</c> for files.</summary>
+    public int? FileCount { get; set; }
 }
 
 public class FilePreviewDto
