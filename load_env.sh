@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
-# Usage: source loadenv.sh path/to/.env
+# Usage: source load_env.sh path/to/.env
 
 ENV_FILE="$1"
 
 if [[ -z "$ENV_FILE" ]]; then
-  echo "Usage: source loadenv.sh <env-file>"
+  echo "Usage: source load_env.sh <env-file>"
   return 1 2>/dev/null || exit 1
 fi
 
