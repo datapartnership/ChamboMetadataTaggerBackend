@@ -9,3 +9,4 @@ backend.http
 *.csv
 .DS_Store
 Catalog/
+nuget.config
