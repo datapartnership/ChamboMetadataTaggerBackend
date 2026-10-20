@@ -17,19 +17,133 @@ services:
       timeout: 5s
       retries: 10
 
+  # One-shot: create the "keycloak" database in Postgres if it doesn't exist yet
+  # (works on an already-initialized volume, unlike /docker-entrypoint-initdb.d).
+  keycloak-db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: ${Database__Username}
+      PGPASSWORD: ${Database__Password}
+      PGDATABASE: ${Database__Name}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        psql -tAc "SELECT 1 FROM pg_database WHERE datname='keycloak'" | grep -q 1 \
+          || psql -c "CREATE DATABASE keycloak"
+
+  # Keycloak (dev mode) with the "chambo" realm imported from keycloak/chambo-realm.json.
+  # State lives in the "keycloak" Postgres database; --import-realm skips a realm that already exists,
+  # so after the first start edit the realm in the admin console (or wipe the DB to re-import the file).
+  # Admin console: http://localhost:8081 (admin / admin). Sample users: see the realm file.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    restart: unless-stopped
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: 8081
+      # Tokens carry issuer http://localhost:8081/realms/chambo (what the browser uses),
+      # while the API reaches Keycloak at http://keycloak:8081 for the discovery/JWKS calls.
+      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://db:5432/keycloak
+      KC_DB_USERNAME: ${Database__Username}
+      KC_DB_PASSWORD: ${Database__Password}
+    volumes:
+      - ./keycloak/chambo-realm.json:/opt/keycloak/data/import/chambo-realm.json:ro
+    ports:
+      - "8081:8081"
+    depends_on:
+      keycloak-db-init:
+        condition: service_completed_successfully
+
+  # MertBlobStorage: self-hosted Azure Blob Storage REST API server
+  # (~/Projects/MertBlobStorage; build with `docker build -t mertblobstorage .` there).
+  mertblobstorage:
+    image: mertblobstorage:latest
+    restart: unless-stopped
+    # The server's MBS_* env overrides can't express the [[accounts]] list, so the
+    # account is appended to the image's default config at startup.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cp /app/config/default.toml /tmp/config.toml
+        printf '\n[[accounts]]\nname = "%s"\nkey1 = "%s"\nkey2 = ""\n' "$$ACCOUNT_NAME" "$$ACCOUNT_KEY" >> /tmp/config.toml
+        exec mertblobstorage --config /tmp/config.toml
+    environment:
+      ACCOUNT_NAME: ${MertBlob__AccountName:-chambo}
+      ACCOUNT_KEY: ${MertBlob__AccountKey:?set MertBlob__AccountKey in .env (openssl rand -base64 32)}
+      # The .NET Azure SDK drops the "/{account}" path segment for hostname endpoints;
+      # the server then falls back to this account.
+      MBS_SERVER__DEFAULT_ACCOUNT: ${MertBlob__AccountName:-chambo}
+    volumes:
+      - mertblob_data:/app/data
+    ports:
+      - "127.0.0.1:8443:8443"
+
+  # One-shot: create the catalog container in MertBlobStorage if it doesn't exist yet.
+  mertblob-init:
+    image: mcr.microsoft.com/azure-cli:latest
+    depends_on:
+      mertblobstorage:
+        condition: service_started
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for i in $$(seq 1 20); do
+          az storage container create --name "$$CONTAINER" --connection-string "$$CONN" >/dev/null 2>&1 && echo "container $$CONTAINER ready" && exit 0
+          sleep 2
+        done
+        echo "could not create container $$CONTAINER" >&2; exit 1
+    environment:
+      CONTAINER: ${CatalogStorage__Azure__ContainerName:-catalog}
+      CONN: DefaultEndpointsProtocol=http;AccountName=${MertBlob__AccountName:-chambo};AccountKey=${MertBlob__AccountKey};BlobEndpoint=http://mertblobstorage:8443/${MertBlob__AccountName:-chambo};
+
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     restart: unless-stopped
     ports:
-      - "8080:80" # the default Dockerfile listens on port 80
+      - "8080:8080" # the default Dockerfile listens on port 80
     env_file:
       - .env
     environment:
       # Override the host so the app reaches the db container, not localhost
       Database__Host: db
+      # Keycloak authentication (the realm is imported from keycloak/chambo-realm.json)
+      Authentication__Method: Keycloak
+      Keycloak__Authority: http://keycloak:8081/realms/chambo
+      Keycloak__Audience: Chambo-API-ID
+      Keycloak__ClientId: Chambo-API-ID
+      Keycloak__RequireHttpsMetadata: "false"
+      Keycloak__RoleMappings__0__KeycloakRole: Admin
+      Keycloak__RoleMappings__0__Role: Admin
+      Keycloak__RoleMappings__1__KeycloakRole: Supervisor
+      Keycloak__RoleMappings__1__Role: Supervisor
+      Keycloak__RoleMappings__2__KeycloakRole: Tagger
+      Keycloak__RoleMappings__2__Role: Tagger
+      # Catalog storage on MertBlobStorage (Azure Blob API, shared-key auth)
+      CatalogStorage__Provider: azure
+      CatalogStorage__Azure__ConnectionString: DefaultEndpointsProtocol=http;AccountName=${MertBlob__AccountName:-chambo};AccountKey=${MertBlob__AccountKey};BlobEndpoint=http://mertblobstorage:8443/${MertBlob__AccountName:-chambo};
+      CatalogStorage__Azure__ContainerName: ${CatalogStorage__Azure__ContainerName:-catalog}
     depends_on:
       db:
         condition: service_healthy
+      keycloak:
+        condition: service_started
+      mertblob-init:
+        condition: service_completed_successfully
 
 volumes:
   postgres_data:
+  mertblob_data:

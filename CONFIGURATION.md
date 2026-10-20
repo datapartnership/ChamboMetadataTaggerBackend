@@ -152,6 +152,8 @@ Preview URLs need `s3` (presigned) or `azure` (SAS; a user-delegation key is use
 - `docker-compose.yml` loads `.env` into the `api` service and overrides `Database__Host=db`.
 - The `db` container takes its database name, user and password from `Database__Name`, `Database__Username` and `Database__Password`, so set those in `.env` before `docker compose up` (compose refuses to start otherwise). Postgres is only published on `127.0.0.1:5432`.
 - The default `Dockerfile` listens on port **80** (compose maps `8080:80`); `Dockerfile.dev` listens on 8080. `Dockerfile.wbg` is the hardened chiseled image, also on port 80.
+- Compose also runs **Keycloak** (`localhost:8081`, admin/admin, data stored in the `keycloak` Postgres database, realm `chambo` imported from `keycloak/chambo-realm.json` on first start only; to re-import, drop that database) and **MertBlobStorage** (`localhost:8443`, image `mertblobstorage:latest`, built from `~/Projects/MertBlobStorage`). The `api` service is forced to `Authentication__Method=Keycloak` and `CatalogStorage__Provider=azure`, with the connection string built from `MertBlob__AccountName` / `MertBlob__AccountKey` (generate the key with `openssl rand -base64 32`). A one-shot `mertblob-init` service creates the catalog container.
+- Sample Keycloak users: `admin@chambo.local` / `admin` (Admin) and `tagger@chambo.local` / `tagger` (Tagger). Frontend client: `chambo-frontend` (public, PKCE).
 - `load_env.sh` exports a `.env` into your shell: `source load_env.sh .env` (blank values are skipped).
 
 ## Secrets hygiene
