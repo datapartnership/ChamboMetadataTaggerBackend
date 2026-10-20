@@ -3,16 +3,16 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      # Keep these in sync with Database__* values in .env
-      POSTGRES_DB: chambo_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: mysecretpassword
+      # Taken from the Database__* values in .env so the two always match
+      POSTGRES_DB: ${Database__Name:?set Database__Name in .env}
+      POSTGRES_USER: ${Database__Username:?set Database__Username in .env}
+      POSTGRES_PASSWORD: ${Database__Password:?set Database__Password in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d chambo_db"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -21,7 +21,7 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8080:80" # the default Dockerfile listens on port 80
     env_file:
       - .env
     environment:

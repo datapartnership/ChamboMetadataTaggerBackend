@@ -4,13 +4,13 @@ A complete ASP.NET Web API 8.0 backend solution for managing file metadata taggi
 
 ## Features
 
-- **JWT Authentication & Authorization** with three roles:
+- **Authentication & Authorization** (JWT, Azure Entra ID or Keycloak, selected by `Authentication__Method`) with three roles:
   - **Admin**: Full access to manage users, files, supervisors, and view tagging progress
   - **Supervisor**: Review and monitor tagging work of assigned students
   - **Tagger** (Student): Access only to assigned files for metadata tagging
 
 - **User Management**: Create, read, update, and delete users
-- **Azure Blob Storage Integration**: List and sync files from Azure Blob Storage
+- **File Storage Integration**: List and sync files from local, S3-compatible or Azure Blob storage (`CatalogStorage`)
 - **Automatic File Import**: Files are automatically imported from blob storage when assigned
 - **File Assignment System**: Admins can assign blob files directly to taggers
 - **Metadata Tagging**: Taggers can add custom key-value tags to files
@@ -73,7 +73,7 @@ MetadataTagging/
 │   ├── FileMetadata.cs           # File metadata entity
 │   ├── FileAssignment.cs         # File assignment entity
 │   ├── FileTag.cs                # File tag entity
-│   ├── AppSettings.cs            # Configuration options classes
+│   ├── AppSettings.cs            # Default startup-user settings (other options live in Options/)
 │   └── CollectionModels.cs, CatalogModels.cs
 │                                  # Catalog API entities (Collection, CollectionFile, Keyword, ...)
 ├── Services/
@@ -120,20 +120,20 @@ Copy `.env.example` to `.env` and fill in your values. ASP.NET Core maps environ
 | `Database__Password` | PostgreSQL password (not used with managed identity) | When not using managed identity |
 | `Database__UseManagedIdentity` | Authenticate to Azure Database for PostgreSQL with a managed identity token | No (default: `false`) |
 | `Database__ManagedIdentityClientId` | Client ID of a user-assigned managed identity | No |
-| `JwtSettings__SecretKey` | JWT signing secret (min. 32 characters) | **Yes** |
-| `JwtSettings__Issuer` | JWT issuer identifier | No (default: `MetadataTaggingAPI`) |
-| `JwtSettings__Audience` | JWT audience identifier | No (default: `MetadataTaggingClient`) |
+| `Authentication__Method` | Active auth method: `Jwt`, `EntraId` or `Keycloak` (exactly one is active) | No (default: `Jwt`) |
+| `JwtSettings__SecretKey` | JWT signing secret (min. 32 characters) | **Yes** when method is `Jwt` |
+| `JwtSettings__Issuer` | JWT issuer identifier | **Yes** when method is `Jwt` (no default) |
+| `JwtSettings__Audience` | JWT audience identifier | **Yes** when method is `Jwt` (no default) |
 | `JwtSettings__ExpiryMinutes` | Token expiry in minutes | No (default: `480`) |
+| `EntraId__TenantId`, `EntraId__ClientId` | Entra ID app registration | **Yes** when method is `EntraId` |
+| `Keycloak__Authority`, `Keycloak__ClientId` | Keycloak realm URL and client | **Yes** when method is `Keycloak` |
 | `CatalogStorage__Provider` | File storage: `local`, `s3`, or `azure` (see `.env.example` for each provider's keys) | No (default: `local`) |
-| `DefaultAdmin__Username` | Default admin username | No |
-| `DefaultAdmin__Email` | Default admin email | No |
-| `DefaultAdmin__Password` | Default admin password | No |
-| `DefaultTagger__Username` | Default tagger username | No |
-| `DefaultTagger__Email` | Default tagger email | No |
-| `DefaultTagger__Password` | Default tagger password | No |
-| `DefaultSupervisor__Username` | Default supervisor username | No |
-| `DefaultSupervisor__Email` | Default supervisor email | No |
-| `DefaultSupervisor__Password` | Default supervisor password | No |
+| `Cors__AllowedOrigins__0`, `__1`, ... | Allowed browser origins (note the double underscores). Empty denies all cross-origin requests | Yes for a browser frontend |
+| `RateLimit__DailyFileDownloadLimit` | Per-user daily download cap, `0` = unlimited | No (default: `0`) |
+| `DefaultAdmin__Username` / `__Email` / `__Password` | Admin created at startup if all three are set | No |
+| `DefaultTagger__*`, `DefaultSupervisor__*` | Same, for a tagger and a supervisor | No |
+
+See [CONFIGURATION.md](CONFIGURATION.md) for every setting, its default, and the validation rules.
 
 To generate a secure JWT secret key:
 ```bash
@@ -142,42 +142,29 @@ openssl rand -base64 48
 
 > **Security note**: Never commit `.env` or `appsettings.Development.json` containing real secrets to source control. The `.env.example` file contains only placeholder values and is safe to commit.
 
-#### Using appsettings.json (local development only)
+#### Local development without a `.env`
 
-1. Update `appsettings.json` with your settings:
+`appsettings.json` ships with empty placeholders only. For local work put your values in an untracked `appsettings.Development.json` (or user secrets), for example:
 
 ```json
 {
-  "Database": {
-    "Host": "localhost",
-    "Port": 5432,
-    "Name": "metadatatagging",
-    "Username": "postgres",
-    "Password": "yourpassword"
-  },
-  "JwtSettings": {
-    "SecretKey": "your-secret-key-here-min-32-characters-long-change-in-production",
-    "Issuer": "MetadataTaggingAPI",
-    "Audience": "MetadataTaggingClient",
-    "ExpiryMinutes": 480
-  },
-  "AzureBlobStorage": {
-    "ConnectionString": "your-azure-storage-connection-string",
-    "ContainerName": "files"
-  },
-  "DefaultAdmin": {
-    "Username": "admin",
-    "Email": "admin@metadatatagging.com",
-    "Password": "Admin123!"
-  }
+  "Database": { "Host": "localhost", "Name": "metadatatagging", "Username": "postgres", "Password": "<password>" },
+  "JwtSettings": { "SecretKey": "<min-32-char-secret>", "Issuer": "<issuer>", "Audience": "<audience>" },
+  "CatalogStorage": { "Provider": "local", "FileStorageRoot": "Catalog" },
+  "DefaultAdmin": { "Username": "<username>", "Email": "<email>", "Password": "<password>" }
 }
 ```
 
-2. **Generate a secure JWT secret key** (minimum 32 characters)
+The `DefaultAdmin` user is created on first run if all three values are set and no user with that email exists. No default credentials ship with the code.
 
-3. **Add your Azure Blob Storage connection string**
+#### Docker Compose
 
-4. **Configure default admin user** - Update the `DefaultAdmin` section with your preferred admin credentials. This user will be automatically created on first run if it doesn't exist.
+```bash
+cp .env.example .env     # fill in Database__Name/Username/Password, JwtSettings__*, etc.
+docker compose up --build
+```
+
+The API is then on `http://localhost:8080`. The Postgres container reads its name, user and password from the same `Database__*` values.
 
 ### Running the Application
 
@@ -203,12 +190,7 @@ dotnet run
 
 ### Database
 
-A PostgreSQL database is required. The schema is applied automatically on startup by EF Core Migrations. A default admin user is automatically created based on the `DefaultAdmin` configuration in `appsettings.json`:
-
-- **Email**: `admin@metadatatagging.com` (configurable)
-- **Username**: `admin` (configurable)
-- **Password**: `Admin123!` (configurable)
-- **Role**: Admin
+A PostgreSQL database is required. The schema is applied automatically on startup by EF Core Migrations. If `DefaultAdmin__Username`, `__Email` and `__Password` are all set, an Admin user with those values is created on startup when none with that email exists (likewise for `DefaultTagger` and `DefaultSupervisor`). Nothing is created by default.
 
 ## API Endpoints
 
@@ -274,7 +256,7 @@ Login with email and password
 This backend also serves the public Low Resource Language Library (LRLL) catalog API,
 which returns **Croissant 1.0 JSON-LD** for text, audio, and video collections sourced from a
 shared database with this app's own file-tagging tables. It uses **this app's existing
-authentication** (local email/password JWT, plus optional Entra ID and Keycloak) instead of
+authentication** (local email/password JWT, Entra ID or Keycloak; one active method) instead of
 its own former Azure AD-group/Keycloak-role scheme.
 
 ### Authorization
@@ -353,8 +335,8 @@ catalog file (unsupported extension, outside the layout, or missing from storage
 New `appsettings.json` sections added for the catalog API (see `.env.example` for the full
 list of environment-variable equivalents):
 
-- `Keycloak` — optional third auth scheme, alongside Local JWT and Entra ID. Configure
-  `Keycloak:Authority` to enable it. `Keycloak:RoleMappings` maps Keycloak client roles
+- `Keycloak` — one of the three auth methods (`Authentication:Method=Keycloak`), which
+  requires `Keycloak:Authority`. `Keycloak:RoleMappings` maps Keycloak client roles
   (`resource_access[ClientId].roles`) onto `Admin`/`Supervisor`/`Tagger`, the same way
   `EntraId:GroupRoleMappings` does for Entra ID groups.
 - `CatalogStorage` — the only file storage (local disk, S3-compatible, or Azure Blob Storage),
@@ -527,10 +509,10 @@ curl -X GET https://localhost:5001/api/admin/tagging-progress \
 
 ## Architecture & Design Patterns
 
-- **Options Pattern**: Type-safe configuration management using `IOptions<T>`
-  - `JwtSettings`: JWT authentication configuration
-  - `AzureBlobStorageSettings`: Azure Blob Storage connection settings
-  - `DefaultAdminSettings`: Default admin user configuration
+- **Options Pattern**: Type-safe configuration management using `IOptions<T>` (classes in `Options/`; see [CONFIGURATION.md](CONFIGURATION.md))
+  - `AuthenticationOptions`, `JwtOptions`, `EntraIdOptions`, `KeycloakOptions`: authentication (one method active)
+  - `DatabaseOptions`, `CatalogStorageOptions`, `RateLimitOptions`, `CorsOptions`
+  - `DefaultAdminSettings` / `DefaultTaggerSettings` / `DefaultSupervisorSettings`: startup users
 - **Dependency Injection**: Full DI implementation for services and repositories
 - **Repository Pattern**: Clean separation of data access logic
 - **DTO Pattern**: Data Transfer Objects for API requests/responses

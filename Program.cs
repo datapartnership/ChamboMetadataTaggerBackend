@@ -18,8 +18,6 @@ using MetadataTagger.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Configuration.AddEnvironmentVariables();
-
 builder.Services.Configure<AuthenticationOptions>(builder.Configuration.GetSection(AuthenticationOptions.Section));
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.Section));
 builder.Services.Configure<DatabaseOptions>(builder.Configuration.GetSection(DatabaseOptions.Section));
@@ -525,7 +523,7 @@ using (var scope = app.Services.CreateScope())
 //let's serve the fronted in another service
 //app.UseStaticFiles();
 
-// Swagger is Development-only: its UI is incompatible with the strict CSP above.
+// Swagger is Development-only.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
