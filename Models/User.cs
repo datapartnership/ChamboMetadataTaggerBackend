@@ -29,6 +29,7 @@ public static class UserRoles
     public const string Admin = "Admin";
     public const string Tagger = "Tagger";
     public const string Supervisor = "Supervisor";
+    public const string Consumer = "Consumer";
 }
 
 public static class UserAuthProviders

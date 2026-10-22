@@ -120,9 +120,9 @@ public class AdminController : ControllerBase
     {
         try
         {
-            if (request.Role != UserRoles.Admin && request.Role != UserRoles.Tagger && request.Role != UserRoles.Supervisor)
+            if (request.Role != UserRoles.Admin && request.Role != UserRoles.Tagger && request.Role != UserRoles.Supervisor && request.Role != UserRoles.Consumer)
             {
-                return BadRequest(ApiResponse<UserDto>.ErrorResponse("Invalid role. Must be 'Admin', 'Tagger', or 'Supervisor'"));
+                return BadRequest(ApiResponse<UserDto>.ErrorResponse("Invalid role. Must be 'Admin', 'Tagger', 'Supervisor', or 'Consumer'"));
             }
 
             var user = await _userService.CreateUserAsync(request);
@@ -149,12 +149,12 @@ public class AdminController : ControllerBase
             return BadRequest(ApiResponse<BulkCreateUsersResponse>.ErrorResponse("No users provided"));
         }
 
-        var validRoles = new[] { UserRoles.Admin, UserRoles.Tagger, UserRoles.Supervisor };
+        var validRoles = new[] { UserRoles.Admin, UserRoles.Tagger, UserRoles.Supervisor, UserRoles.Consumer };
         var invalidRoleEntry = request.Users.FirstOrDefault(u => !validRoles.Contains(u.Role));
         if (invalidRoleEntry != null)
         {
             return BadRequest(ApiResponse<BulkCreateUsersResponse>.ErrorResponse(
-                $"Invalid role '{invalidRoleEntry.Role}' for user '{invalidRoleEntry.Username}'. Must be 'Admin', 'Tagger', or 'Supervisor'"));
+                $"Invalid role '{invalidRoleEntry.Role}' for user '{invalidRoleEntry.Username}'. Must be 'Admin', 'Tagger', 'Supervisor', or 'Consumer'"));
         }
 
         try

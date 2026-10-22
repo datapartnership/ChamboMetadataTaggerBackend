@@ -12,7 +12,8 @@ public class EntraUserProvisioningService : IEntraUserProvisioningService
     [
         UserRoles.Admin,
         UserRoles.Supervisor,
-        UserRoles.Tagger
+        UserRoles.Tagger,
+        UserRoles.Consumer
     ];
 
     private const int UsernameMaxLength = 100;
@@ -38,7 +39,7 @@ public class EntraUserProvisioningService : IEntraUserProvisioningService
         var role = RolePrecedence.FirstOrDefault(r => roles.Contains(r, StringComparer.OrdinalIgnoreCase));
         if (role == null)
         {
-            // No recognized Admin/Supervisor/Tagger role assigned by the identity provider.
+            // No recognized Admin/Supervisor/Tagger/Consumer role assigned by the identity provider.
             return null;
         }
 

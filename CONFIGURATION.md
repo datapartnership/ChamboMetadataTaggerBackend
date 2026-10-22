@@ -71,9 +71,9 @@ Requires `EntraId:TenantId` and `EntraId:ClientId`; otherwise startup fails.
 | `EntraId__Audience` | No | Expected token audience; also the base of the Swagger `user_impersonation` scope. Set it to your Application ID URI |
 | `EntraId__RoleClaimType` | No | `roles` (Entra App Roles) |
 | `EntraId__GroupClaimType` | No | `groups` |
-| `EntraId__GroupRoleMappings__N__GroupId` / `__Role` | No | Maps a group object ID (GUID) to `Admin`, `Supervisor` or `Tagger` |
+| `EntraId__GroupRoleMappings__N__GroupId` / `__Role` | No | Maps a group object ID (GUID) to `Admin`, `Supervisor`, `Tagger` or `Consumer` |
 
-Roles come from a `roles` claim (App Roles whose value is exactly `Admin`, `Supervisor` or `Tagger`) or from a `groups` claim matched against `GroupRoleMappings`. Several groups may map to one role; if a user matches several roles the precedence is Admin, then Supervisor, then Tagger. Group *overage* claims (needing a Microsoft Graph lookup) are not supported. Invalid mappings (non-GUID group ID or unknown role) stop startup.
+Roles come from a `roles` claim (App Roles whose value is exactly `Admin`, `Supervisor`, `Tagger` or `Consumer`) or from a `groups` claim matched against `GroupRoleMappings`. Several groups may map to one role; if a user matches several roles the precedence is Admin, then Supervisor, then Tagger, then Consumer. `Consumer` is for API clients that query and download content (the `Read` policy, which only Consumers and Admins pass). Group *overage* claims (needing a Microsoft Graph lookup) are not supported. Invalid mappings (non-GUID group ID or unknown role) stop startup.
 
 ```json
 "EntraId": {
@@ -86,7 +86,7 @@ Roles come from a `roles` claim (App Roles whose value is exactly `Admin`, `Supe
 
 On first successful sign-in a local `Users` row is created (and kept in sync afterwards) from the token's email, name and role claims, so per-user data keeps pointing at a stable integer `Users.Id`. The frontend calls `GET /api/Auth/me` with its Entra access token to get the provisioned user.
 
-App registration checklist: expose an API (Application ID URI), create the three App Roles, and assign users or groups to them in Enterprise applications.
+App registration checklist: expose an API (Application ID URI), create the four App Roles, and assign users or groups to them in Enterprise applications.
 
 ### Keycloak
 
@@ -98,7 +98,7 @@ Requires `Keycloak:Authority`; otherwise startup fails.
 | `Keycloak__ClientId` | **Yes** (for role mapping and Swagger) | Roles are read from `resource_access[ClientId].roles` |
 | `Keycloak__Audience` | No | |
 | `Keycloak__RequireHttpsMetadata` | No | `true` (set `false` only for local HTTP Keycloak) |
-| `Keycloak__RoleMappings__N__KeycloakRole` / `__Role` | No | Maps a client role to `Admin`, `Supervisor` or `Tagger` |
+| `Keycloak__RoleMappings__N__KeycloakRole` / `__Role` | No | Maps a client role to `Admin`, `Supervisor`, `Tagger` or `Consumer` |
 
 Every `RoleMappings` entry must have a non-blank `KeycloakRole` and a valid `Role`. **Do not add blank entries**, or startup throws. Leave the whole array out when unused. A local `Users` row is created on first login with `AuthProvider = "Keycloak"`.
 

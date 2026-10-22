@@ -114,6 +114,36 @@ public class EntraUserProvisioningServiceTests
         Assert.Equal(UserRoles.Admin, user!.Role);
     }
 
+    [Fact]
+    public async Task ProvisionOrSyncUserAsync_CreatesConsumer_WhenOnlyConsumerRolePresent()
+    {
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+        await using var context = await CreateContextAsync(connection);
+        var service = new EntraUserProvisioningService(context);
+
+        var user = await service.ProvisionOrSyncUserAsync(
+            "consumer@example.com", "API Consumer", new[] { UserRoles.Consumer });
+
+        Assert.NotNull(user);
+        Assert.Equal(UserRoles.Consumer, user!.Role);
+    }
+
+    [Fact]
+    public async Task ProvisionOrSyncUserAsync_PrefersTaggerOverConsumer()
+    {
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+        await using var context = await CreateContextAsync(connection);
+        var service = new EntraUserProvisioningService(context);
+
+        var user = await service.ProvisionOrSyncUserAsync(
+            "tagger-consumer@example.com", "Tagger Consumer", new[] { UserRoles.Consumer, UserRoles.Tagger });
+
+        Assert.NotNull(user);
+        Assert.Equal(UserRoles.Tagger, user!.Role);
+    }
+
     private static async Task<ApplicationDbContext> CreateContextAsync(SqliteConnection connection)
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

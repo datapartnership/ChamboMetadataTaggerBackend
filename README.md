@@ -4,10 +4,11 @@ A complete ASP.NET Web API 8.0 backend solution for managing file metadata taggi
 
 ## Features
 
-- **Authentication & Authorization** (JWT, Azure Entra ID or Keycloak, selected by `Authentication__Method`) with three roles:
+- **Authentication & Authorization** (JWT, Azure Entra ID or Keycloak, selected by `Authentication__Method`) with four roles:
   - **Admin**: Full access to manage users, files, supervisors, and view tagging progress
   - **Supervisor**: Review and monitor tagging work of assigned students
   - **Tagger** (Student): Access only to assigned files for metadata tagging
+  - **Consumer**: API-only access to query collections and download content
 
 - **User Management**: Create, read, update, and delete users
 - **File Storage Integration**: List and sync files from local, S3-compatible or Azure Blob storage (`CatalogStorage`)
@@ -261,9 +262,9 @@ its own former Azure AD-group/Keycloak-role scheme.
 
 ### Authorization
 
-Catalog endpoints use two policies, mapped onto Chambo's Admin/Supervisor/Tagger roles:
+Catalog endpoints use two policies, mapped onto Chambo's roles:
 
-- **`Read`**: any authenticated user (Admin, Supervisor, or Tagger).
+- **`Read`**: Consumer or Admin (Taggers and Supervisors get 403).
 - **`Write`**: Admin only.
 
 Public/anonymous endpoints (health checks, summaries, the CKAN-style catalog browser, and

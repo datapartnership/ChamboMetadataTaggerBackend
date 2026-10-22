@@ -132,6 +132,8 @@ services:
       Keycloak__RoleMappings__1__Role: Supervisor
       Keycloak__RoleMappings__2__KeycloakRole: Tagger
       Keycloak__RoleMappings__2__Role: Tagger
+      Keycloak__RoleMappings__3__KeycloakRole: Consumer
+      Keycloak__RoleMappings__3__Role: Consumer
       # Catalog storage on MertBlobStorage (Azure Blob API, shared-key auth)
       CatalogStorage__Provider: azure
       CatalogStorage__Azure__ConnectionString: DefaultEndpointsProtocol=http;AccountName=${MertBlob__AccountName:-chambo};AccountKey=${MertBlob__AccountKey};BlobEndpoint=http://mertblobstorage:8443/${MertBlob__AccountName:-chambo};

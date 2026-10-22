@@ -114,7 +114,7 @@ const string EntraIdAuthScheme = "EntraId";
 const string KeycloakAuthScheme = "Keycloak";
 
 var recognizedRoles = new HashSet<string>(
-    [UserRoles.Admin, UserRoles.Supervisor, UserRoles.Tagger],
+    [UserRoles.Admin, UserRoles.Supervisor, UserRoles.Tagger, UserRoles.Consumer],
     StringComparer.OrdinalIgnoreCase);
 
 // Only validate / register the provider selected by Authentication:Method. Nested
@@ -160,7 +160,7 @@ else if (authOptions.IsEntraId)
     if (invalidGroupRoleMapping != null)
     {
         throw new InvalidOperationException(
-            "Each EntraId:GroupRoleMappings entry must contain a valid group object ID and a role of Admin, Supervisor, or Tagger.");
+            "Each EntraId:GroupRoleMappings entry must contain a valid group object ID and a role of Admin, Supervisor, Tagger, or Consumer.");
     }
 
     var conflictingGroupRoleMapping = entraIdOptions.GroupRoleMappings
@@ -219,7 +219,7 @@ else // Keycloak
     if (invalidKeycloakRoleMapping != null)
     {
         throw new InvalidOperationException(
-            "Each Keycloak:RoleMappings entry must contain a Keycloak client role name and a role of Admin, Supervisor, or Tagger.");
+            "Each Keycloak:RoleMappings entry must contain a Keycloak client role name and a role of Admin, Supervisor, Tagger, or Consumer.");
     }
 
     var conflictingKeycloakRoleMapping = keycloakOptions.RoleMappings
@@ -267,11 +267,11 @@ else // Keycloak
 // ── Authorization policies ────────────────────────────────────────────────────
 // The catalog API's "Read"/"Write" policies (ported from LRLL, which originally
 // gated them on Azure AD groups / Keycloak roles) are re-mapped onto Chambo's own
-// Admin/Supervisor/Tagger role model: any authenticated (and therefore JIT-verified
-// or locally provisioned) user can Read; only Admins can Write.
+// role model: API consumers (and Admins) can Read, i.e. query and download content;
+// only Admins can Write.
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy("Read", policy => policy.RequireAuthenticatedUser());
+    options.AddPolicy("Read", policy => policy.RequireRole(UserRoles.Consumer, UserRoles.Admin));
     options.AddPolicy("Write", policy => policy.RequireRole(UserRoles.Admin));
 });
 

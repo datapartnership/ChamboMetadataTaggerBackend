@@ -9,7 +9,8 @@
       "Chambo-API-ID": [
         { "name": "Admin" },
         { "name": "Supervisor" },
-        { "name": "Tagger" }
+        { "name": "Tagger" },
+        { "name": "Consumer" }
       ]
     }
   },
@@ -64,6 +65,16 @@
       "emailVerified": true,
       "credentials": [{ "type": "password", "value": "tagger", "temporary": false }],
       "clientRoles": { "Chambo-API-ID": ["Tagger"] }
+    },
+    {
+      "username": "consumer@chambo.local",
+      "email": "consumer@chambo.local",
+      "firstName": "Chambo",
+      "lastName": "Consumer",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "consumer", "temporary": false }],
+      "clientRoles": { "Chambo-API-ID": ["Consumer"] }
     }
   ]
 }
